@@ -6261,7 +6261,7 @@ function applyArticleMasterFilters(ss) {
 }
 
 /**
- * 1.4 RECHNUNGSEINGANG (Beleg-Journal)
+ * 1.4 RECHNUNGSEINGANG: TABELLENSTRUKTUR (1 ZEILE PRO GESAMTRECHNUNG)
  */
 function setupInvoiceHistorySheet(ss) {
   if (!ss) ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -6270,24 +6270,21 @@ function setupInvoiceHistorySheet(ss) {
   else recSheet.clear();
   
   const headers = [
-    'Beleg-ID', 'Standort', 'Rechnungsdatum', 'Lieferant', 'Rechnungs-Nr.', 'Artikel-ID', 'Artikelbezeichnung',
-    'Warengruppe', 'Hauptkategorie', 'Menge (Gebinde)', 'Gebinde / Einheit', 'Einzelpreis Netto (€)', 'Gesamt Netto (€)',
-    'MwSt-Satz', 'MwSt-Betrag (€)', 'Gesamt Brutto (€)', 'Dateiname / Scan-Quelle', 'Status / Prüfung', 'Jahr_Monat',
-    'Gesamtmenge Basiseinheit (Zahl)', 'Basiseinheit'
+    'Beleg-ID', 'Standort', 'Rechnungsdatum', 'Lieferant', 'Rechnungs-Nr.', 
+    'Gesamt Netto (€)', 'MwSt-Betrag (€)', 'Gesamt Brutto (€)', 
+    'Anzahl Positionen', 'Hauptkategorie', 'Dateiname / Scan-Quelle', 
+    'Status / Prüfung', 'Jahr_Monat'
   ];
   
   recSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  recSheet.getRange('A1:U1').setFontWeight('bold').setBackground('#004D40').setFontColor('#FFFFFF').setHorizontalAlignment('center').setWrap(true);
+  recSheet.getRange('A1:M1').setFontWeight('bold').setBackground('#004D40').setFontColor('#FFFFFF').setHorizontalAlignment('center').setWrap(true);
   recSheet.setRowHeight(1, 40);
   recSheet.setFrozenRows(1);
   
   recSheet.getRange('C2:C2000').setNumberFormat('dd.MM.yyyy');
-  recSheet.getRange('J2:J2000').setNumberFormat('#,##0.00');
-  recSheet.getRange('L2:M2000').setNumberFormat('[$€-de-DE] #,##0.00');
-  recSheet.getRange('N2:N2000').setNumberFormat('0.0%');
-  recSheet.getRange('O2:P2000').setNumberFormat('[$€-de-DE] #,##0.00');
-  recSheet.getRange('T2:T2000').setNumberFormat('#,##0.00');
-  recSheet.autoResizeColumns(1, 21);
+  recSheet.getRange('F2:H2000').setNumberFormat('[$€-de-DE] #,##0.00');
+  recSheet.getRange('I2:I2000').setNumberFormat('#,##0');
+  recSheet.autoResizeColumns(1, 13);
 }
 
 /**
@@ -6332,35 +6329,41 @@ function importPreloadedInvoices(ss) {
 }
 
 /**
- * Kernfunktion zur Belegerfassung mit Nachzügler-Logik & OCR-Plausibilitätsprüfung & Echtzeit-Alerts
+ * Kernfunktion zur Belegerfassung:
+ * - Pflegt/aktualisiert alle Artikelpositionen im ARTIKELSTAMM
+ * - Schreibt GENAU 1 ZEILE pro Gesamtrechnung in RECHNUNGSEINGANG
  */
 function ingestInvoiceData(ss, invoiceData, fileName) {
   if (!ss) ss = SpreadsheetApp.getActiveSpreadsheet();
   const recSheet = ss.getSheetByName(CONFIG.NAME_RECHNUNGEN);
   const artSheet = ss.getSheetByName(CONFIG.NAME_ARTIKEL);
-  if (!recSheet || !artSheet) return 0;
+  if (!recSheet || !artSheet) return { count: 0, alerts: [] };
 
-  // 1. Dubletten-Prüfung: Prüfe ob dieser Beleg bereits verbucht ist
+  if (!invoiceData || !invoiceData.items || invoiceData.items.length === 0) {
+    return { count: 0, alerts: [] };
+  }
+
+  // 1. Dubletten-Prüfung in RECHNUNGSEINGANG
   const recLastRow = recSheet.getLastRow();
   if (recLastRow > 1) {
-    const recData = recSheet.getRange(2, 1, recLastRow - 1, 19).getValues();
+    const recData = recSheet.getRange(2, 1, recLastRow - 1, Math.min(13, recSheet.getLastColumn())).getValues();
     for (let r = 0; r < recData.length; r++) {
-      const rowFile = String(recData[r][16] || '').trim();
+      const rowFile = String(recData[r][10] || '').trim();
       const rowLieferant = String(recData[r][3] || '').trim();
       const rowRn = String(recData[r][4] || '').trim();
       
       // Dublette nach Dateiname
       if (fileName && rowFile && rowFile.toLowerCase() === fileName.toLowerCase()) {
-        Logger.log(`Dublette erkannt: Datei "${fileName}" wurde bereits in Zeile ${r + 2} verbucht. Buchung wird übersprungen.`);
-        return 0;
+        Logger.log(`Dublette erkannt: Datei "${fileName}" wurde bereits verbucht.`);
+        return { count: 0, alerts: [] };
       }
       // Dublette nach Lieferant + Rechnungsnummer
       if (invoiceData.lieferant && invoiceData.rechnungsNr && 
           rowLieferant.toLowerCase() === invoiceData.lieferant.toLowerCase() && 
           rowRn.toLowerCase() === invoiceData.rechnungsNr.toLowerCase() && 
           !invoiceData.rechnungsNr.startsWith('RN-UNKNOWN') && !invoiceData.rechnungsNr.startsWith('RN-2026')) {
-        Logger.log(`Dublette erkannt: Beleg "${invoiceData.rechnungsNr}" von "${invoiceData.lieferant}" bereits in Zeile ${r + 2} verbucht. Buchung wird übersprungen.`);
-        return 0;
+        Logger.log(`Dublette erkannt: Beleg "${invoiceData.rechnungsNr}" von "${invoiceData.lieferant}" bereits verbucht.`);
+        return { count: 0, alerts: [] };
       }
     }
   }
@@ -6398,9 +6401,9 @@ function ingestInvoiceData(ss, invoiceData, fileName) {
     });
   }
 
-  const newInvoiceRows = [];
-  const startRecRow = recSheet.getLastRow() + 1;
-  let belegCounter = startRecRow - 1;
+  let totalInvoiceNetto = 0;
+  let totalInvoiceMwSt = 0;
+  const categoryCounts = {};
   const realtimeAlerts = [];
 
   if (isDateMissing) {
@@ -6411,20 +6414,21 @@ function ingestInvoiceData(ss, invoiceData, fileName) {
     });
   }
 
+  // 2. Positionen im ARTIKELSTAMM aktualisieren / einpflegen
   invoiceData.items.forEach(item => {
-    belegCounter++;
-    const belegId = 'BEL-' + String(belegCounter).padStart(5, '0');
     const wgInfo = getWarengruppenInfo(item.wg);
     const wgCode = wgInfo.code;
     const nameLower = item.name.toLowerCase();
     
     const netto = Math.round(item.menge * item.einzelNetto * 100) / 100;
     const mwstBetrag = Math.round(netto * wgInfo.mwst * 100) / 100;
-    const brutto = Math.round((netto + mwstBetrag) * 100) / 100;
     const norm = normalizeUnitAndPrice(item.name, item.einheit, item.menge, item.einzelNetto);
     
+    totalInvoiceNetto += netto;
+    totalInvoiceMwSt += mwstBetrag;
+    categoryCounts[wgInfo.kat] = (categoryCounts[wgInfo.kat] || 0) + 1;
+
     let artId = '';
-    let rowBookingStatus = bookingStatus;
 
     if (existingArticles[nameLower]) {
       const existing = existingArticles[nameLower];
@@ -6482,8 +6486,6 @@ function ingestInvoiceData(ss, invoiceData, fileName) {
             artSheet.getRange(r, 12).setValue(norm.referenzpreis);
             artSheet.getRange(r, 16).setValue('Aktualisiert via Beleg ' + invoiceData.rechnungsNr);
           }
-        } else {
-          rowBookingStatus = 'Nachzügler verbucht';
         }
       }
     } else {
@@ -6523,40 +6525,45 @@ function ingestInvoiceData(ss, invoiceData, fileName) {
         note: invoiceData.rechnungsNr
       };
     }
-
-    const totalMengeBasiseinheit = Math.round(item.menge * (norm.inhalt || 1) * 1000) / 1000;
-
-    newInvoiceRows.push([
-      belegId,
-      CONFIG.LOCATION_NAME,
-      isDateMissing ? '' : bookingDate,
-      invoiceData.lieferant,
-      invoiceData.rechnungsNr,
-      artId,
-      item.name,
-      wgInfo.name,
-      wgInfo.kat,
-      item.menge,
-      item.einheit,
-      item.einzelNetto,
-      netto,
-      wgInfo.mwst,
-      mwstBetrag,
-      brutto,
-      fileName,
-      rowBookingStatus,
-      jahrMonat,
-      totalMengeBasiseinheit,
-      norm.basiseinheit
-    ]);
   });
 
-  if (newInvoiceRows.length > 0) {
-    recSheet.getRange(startRecRow, 1, newInvoiceRows.length, newInvoiceRows[0].length).setValues(newInvoiceRows);
+  // 3. Dominante Warengruppen-Kategorie bestimmen
+  let dominantKat = 'Food';
+  let maxCount = 0;
+  for (let k in categoryCounts) {
+    if (categoryCounts[k] > maxCount) {
+      maxCount = categoryCounts[k];
+      dominantKat = k;
+    }
   }
 
+  // 4. GENAU EINE ZEILE für den Gesamtbeleg in RECHNUNGSEINGANG schreiben
+  const totalNettoRounded = Math.round(totalInvoiceNetto * 100) / 100;
+  const totalMwStRounded = Math.round(totalInvoiceMwSt * 100) / 100;
+  const totalBruttoRounded = Math.round((totalNettoRounded + totalMwStRounded) * 100) / 100;
+  const nextRecRow = recSheet.getLastRow() + 1;
+  const belegId = 'BEL-' + (jahrMonat !== 'Ungeprüft' ? jahrMonat.replace('-', '') : '2026') + '-' + String(nextRecRow - 1).padStart(4, '0');
+
+  const invoiceRow = [
+    belegId,
+    CONFIG.LOCATION_NAME,
+    isDateMissing ? '' : bookingDate,
+    invoiceData.lieferant,
+    invoiceData.rechnungsNr,
+    totalNettoRounded,
+    totalMwStRounded,
+    totalBruttoRounded,
+    invoiceData.items.length,
+    dominantKat,
+    fileName,
+    bookingStatus,
+    jahrMonat
+  ];
+
+  recSheet.getRange(nextRecRow, 1, 1, invoiceRow.length).setValues([invoiceRow]);
+
   return {
-    count: newInvoiceRows.length,
+    count: invoiceData.items.length,
     alerts: realtimeAlerts
   };
 }
@@ -6639,7 +6646,7 @@ function runDatabaseHealthAudit(ss) {
 
   // 2. Audit RECHNUNGSEINGANG
   if (recSheet && recSheet.getLastRow() > 1) {
-    const recData = recSheet.getRange(2, 1, recSheet.getLastRow() - 1, 19).getValues();
+    const recData = recSheet.getRange(2, 1, recSheet.getLastRow() - 1, Math.min(13, recSheet.getLastColumn())).getValues();
     auditReport.totalChecked += recData.length;
     const invoiceMap = {};
 
@@ -6647,7 +6654,7 @@ function runDatabaseHealthAudit(ss) {
       const dateVal = row[2] instanceof Date ? row[2] : (row[2] ? new Date(row[2]) : null);
       const lieferant = String(row[3] || '');
       const rn = String(row[4] || '');
-      const gesamtNetto = parseFloat(row[12]) || 0;
+      const gesamtNetto = parseFloat(row[5]) || 0;
 
       // Dimension 4: Datumsinkonsistenzen (Zukunft)
       if (dateVal instanceof Date && !isNaN(dateVal.getTime())) {
@@ -6672,7 +6679,7 @@ function runDatabaseHealthAudit(ss) {
           auditReport.issues.push({
             type: 'DUPLICATE_INVOICE_CONFLICT',
             item: key,
-            details: `Widersprüchlicher Beleg: Rechnungs-Nr ${rn} (${lieferant}) existiert mehrfach mit unterschiedlichen Positionssummen.`
+            details: `Widersprüchlicher Beleg: Rechnungs-Nr ${rn} (${lieferant}) existiert mehrfach mit unterschiedlichen Summen.`
           });
         }
       }
@@ -6793,75 +6800,46 @@ function suggestMasterIngredient(artName, wg) {
 }
 
 /**
- * Plausibilitäts- und OCR-Audit für eingelesene Rechnungen
+ * Plausibilitäts- und OCR-Audit für eingelesene Rechnungen (Belegebene)
  */
 function auditInvoicesOCR(ss) {
   if (!ss) ss = SpreadsheetApp.getActiveSpreadsheet();
   const recSheet = ss.getSheetByName(CONFIG.NAME_RECHNUNGEN);
   if (!recSheet || recSheet.getLastRow() < 2) return [];
 
-  const data = recSheet.getRange(2, 1, recSheet.getLastRow() - 1, 19).getValues();
-  const invMap = {};
+  const data = recSheet.getRange(2, 1, recSheet.getLastRow() - 1, Math.min(13, recSheet.getLastColumn())).getValues();
+  const auditRows = [];
 
   data.forEach(row => {
     const belegId = String(row[0] || '').trim();
     const dateVal = row[2] instanceof Date ? row[2] : (row[2] ? new Date(row[2]) : null);
     const lieferant = String(row[3] || '').trim();
     const rechnungsNr = String(row[4] || '').trim();
-    const artName = String(row[6] || '').trim();
-    const menge = parseFloat(row[9]) || 0;
-    const einzelNetto = parseFloat(row[11]) || 0;
-    const gesamtNetto = parseFloat(row[12]) || 0;
-    const bookingStatus = String(row[16] || '').trim();
+    const gesamtNetto = parseFloat(row[5]) || 0;
+    const itemCount = parseInt(row[8], 10) || 0;
+    const bookingStatus = String(row[11] || '').trim();
 
-    const invKey = `${lieferant}_${rechnungsNr || belegId}`;
-    if (!invMap[invKey]) {
-      invMap[invKey] = {
-        belegId: belegId,
-        rechnungsNr: rechnungsNr || 'Ohne Nr.',
-        lieferant: lieferant,
-        date: dateVal,
-        itemCount: 0,
-        sumNetto: 0,
-        issues: []
-      };
-    }
-
-    invMap[invKey].itemCount++;
-    invMap[invKey].sumNetto += gesamtNetto;
-
-    if (einzelNetto <= 0 && gesamtNetto <= 0 && !bookingStatus.toLowerCase().includes('gutschrift')) {
-      invMap[invKey].issues.push(`Position "${artName}": 0,00 €`);
-    }
-    if (einzelNetto > 500) {
-      invMap[invKey].issues.push(`Position "${artName}": Hoher Einzelpreis (${einzelNetto.toFixed(2)} €)`);
-    }
-  });
-
-  const auditRows = [];
-  Object.keys(invMap).forEach(k => {
-    const inv = invMap[k];
     let status = 'OK';
     let diagnosis = 'Beleg rechnerisch plausibel';
 
-    if (inv.issues.length > 0) {
-      status = 'AUFFÄLLIGKEIT';
-      diagnosis = inv.issues.join(' | ');
-    } else if (inv.itemCount === 0) {
+    if (itemCount === 0) {
       status = 'LEERER_BELEG';
       diagnosis = 'Keine Positionen erkannt';
-    } else if (inv.sumNetto === 0) {
-      status = 'SUMME_NULL';
-      diagnosis = 'Belegsumme ist 0,00 €';
+    } else if (gesamtNetto <= 0 && !bookingStatus.toLowerCase().includes('gutschrift')) {
+      status = 'NULLBETRAG';
+      diagnosis = 'Gesamt-Netto 0,00 €';
+    } else if (bookingStatus.includes('Prüffall')) {
+      status = 'DATUM_UNKLAR';
+      diagnosis = 'Rechnungsdatum konnte nicht zweifelsfrei extrahiert werden';
     }
 
     auditRows.push([
-      inv.belegId,
-      inv.rechnungsNr,
-      inv.lieferant,
-      inv.date instanceof Date && !isNaN(inv.date.getTime()) ? inv.date : '',
-      inv.itemCount,
-      Math.round(inv.sumNetto * 100) / 100,
+      belegId,
+      dateVal ? Utilities.formatDate(dateVal, 'Europe/Berlin', 'dd.MM.yyyy') : 'Unbekannt',
+      lieferant,
+      rechnungsNr,
+      itemCount,
+      gesamtNetto,
       status,
       diagnosis
     ]);
@@ -8380,6 +8358,111 @@ function parseAmazonInvoiceLines(lines) {
   return items;
 }
 
+function isStaudeInvoice(text, supplier) {
+  const t = (text || '').toLowerCase();
+  const s = (supplier || '').toLowerCase();
+  return s.includes('staude') || s.includes('waldhoff') || t.includes('getränke staude') || t.includes('waldhoff');
+}
+
+function parseStaudeInvoiceLines(lines) {
+  const items = [];
+  let currentItem = null;
+  let inLeergut = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    // Abbruch / Summenbereich
+    if (/^(?:warenwert|dieselpreisaufschlag|pfandwert|\+\s*ust|gesamt in eur|der betrag von)/i.test(line)) {
+      if (currentItem) {
+        items.push(currentItem);
+        currentItem = null;
+      }
+      const dieselMatch = line.match(/dieselpreisaufschlag\s+(\d+[\.,]\d{2})/i);
+      if (dieselMatch) {
+        const dVal = parseFloat(dieselMatch[1].replace(',', '.'));
+        items.push({
+          artNr: 'DIESEL',
+          name: 'Dieselpreisaufschlag',
+          menge: 1,
+          einheit: 'Pauschale',
+          einzelNetto: dVal,
+          gesamtNetto: dVal,
+          wg: 'E10: Getränke'
+        });
+      }
+      continue;
+    }
+
+    if (/^leergutartikel/i.test(line)) {
+      if (currentItem) {
+        items.push(currentItem);
+        currentItem = null;
+      }
+      inLeergut = true;
+      continue;
+    }
+
+    if (inLeergut) {
+      const leergutMatch = line.match(/^(\d{6,8})\s+(.+?)\s+(\d+)\s+(\d+)\s+(\-?\d+)\s+(\d+[\.,]\d+)\s+(\-?\d+[\.,]\d{2})\s*([VE])?$/i);
+      if (leergutMatch) {
+        const artNr = leergutMatch[1];
+        const name = leergutMatch[2].trim();
+        const diffQty = parseFloat(leergutMatch[5]);
+        const singlePfand = parseFloat(leergutMatch[6].replace(',', '.'));
+        const totalVal = parseFloat(leergutMatch[7].replace(',', '.'));
+        if (Math.abs(totalVal) > 0 || Math.abs(diffQty) > 0) {
+          items.push({
+            artNr: artNr,
+            name: name,
+            menge: diffQty !== 0 ? diffQty : 1,
+            einheit: 'Pfand',
+            einzelNetto: singlePfand,
+            gesamtNetto: totalVal,
+            wg: 'E10: Getränke'
+          });
+        }
+      }
+      continue;
+    }
+
+    // Warenpositionen: z. B. "0034210 Oberbräu Hell 50L 2 Fass 160,0000/Fa 320,00 V"
+    const itemMatch = line.match(/^(\d{6,8})\s+(.+?)\s+(\d+[\.,]?\d*)\s+([A-Za-zäöüÄÖÜ0-9\-\/]+)\s+(\d+[\.,]\d+)\s*(?:\/[A-Za-z]+)?\s+(\d+[\.,]\d{2})\s*([VE])?$/i);
+    if (itemMatch) {
+      if (currentItem) {
+        items.push(currentItem);
+      }
+      const artNr = itemMatch[1];
+      const name = itemMatch[2].trim();
+      const menge = parseFloat(itemMatch[3].replace(',', '.'));
+      const einheit = itemMatch[4].trim();
+      const einzelNetto = parseFloat(itemMatch[5].replace(',', '.'));
+      const gesamtNetto = parseFloat(itemMatch[6].replace(',', '.'));
+
+      currentItem = {
+        artNr: artNr,
+        name: name,
+        menge: menge,
+        einheit: einheit,
+        einzelNetto: einzelNetto,
+        gesamtNetto: gesamtNetto,
+        wg: 'E10: Getränke'
+      };
+    } else if (currentItem) {
+      if (!/^(?:lfs\b|ihre bestellnummer|verkauf|leergut|warenwert)/i.test(line)) {
+        currentItem.name += ' ' + line.trim();
+      }
+    }
+  }
+
+  if (currentItem) {
+    items.push(currentItem);
+  }
+
+  return items;
+}
+
 function parseRetailReceiptLines(lines, supplier) {
   const items = [];
   let pendingQty = null;
@@ -8462,9 +8545,11 @@ function parseInvoiceText(text, fileName) {
   // 3. Rechnungsnummer erkennen
   const rechnungsNr = extractInvoiceNumber(text, rechnungsDatum);
 
-  // 4. Positionen erkennen (Amazon vs. Einzelhandel vs. Großhandel)
+  // 4. Positionen erkennen (Staude vs. Amazon vs. Einzelhandel vs. Großhandel)
   let items = [];
-  if (isAmazonInvoice(text, lieferant)) {
+  if (isStaudeInvoice(text, lieferant)) {
+    items = parseStaudeInvoiceLines(lines);
+  } else if (isAmazonInvoice(text, lieferant)) {
     items = parseAmazonInvoiceLines(lines);
   } else if (isRetailReceipt(text, lieferant)) {
     items = parseRetailReceiptLines(lines, lieferant);
