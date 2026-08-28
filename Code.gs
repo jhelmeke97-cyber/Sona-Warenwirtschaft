@@ -37,7 +37,10 @@ const CONFIG = {
   NAME_PRUEFUNG: 'PRUEFUNG_EINKAUF',
   NAME_SCHWUND_BRUCH: 'SCHWUND_BRUCH',
   NAME_SCHWUND_NEU: 'SCHWUND_NEU',
-  TARGET_SCHWUND_SPREADSHEET_ID: '1-eonw5BPF6zwCpfRXtQy9a2jyyRH9vevabiFtoA2Rno'
+  TARGET_SCHWUND_SPREADSHEET_ID: '1-eonw5BPF6zwCpfRXtQy9a2jyyRH9vevabiFtoA2Rno',
+  SONA_HUB_SPREADSHEET_ID: '1VZ2Q9tU3QcmVhYZRotYWkV-wgNwQFWsGZ6QLvH4goWE',
+  SONA_HUB_TAB_WEEKLY: 'SCHWUND_SONA_KARLI',
+  SONA_HUB_TAB_RAW: 'SCHWUND_ROHDATEN_KARLI'
 };
 
 /**
@@ -8314,6 +8317,199 @@ function deploySchwundNeuToTargetSpreadsheetPrompt() {
 }
 
 /**
+ * ============================================================================
+ * SONA HUB SYNCHRONISATIONS-ENGINE (ZENTRALER WARENWIRTSCHAFTS-TRIGGER)
+ * ============================================================================
+ */
+function syncSchwundDataFromRestaurantToSonaHub() {
+  Logger.log('Starte Schwund-Synchronisation zum SONA Hub...');
+  try {
+    const targetId = CONFIG.TARGET_SCHWUND_SPREADSHEET_ID || '1-eonw5BPF6zwCpfRXtQy9a2jyyRH9vevabiFtoA2Rno';
+    const restSs = SpreadsheetApp.openById(targetId);
+    const sourceSheet = restSs.getSheetByName(CONFIG.NAME_SCHWUND_NEU || 'SCHWUND_NEU');
+    if (!sourceSheet || sourceSheet.getLastRow() < 4) {
+      Logger.log('Keine Schwundbuchungen in ' + targetId + ' vorhanden.');
+      return;
+    }
+
+    const rawData = sourceSheet.getRange(4, 1, sourceSheet.getLastRow() - 3, 16).getValues();
+    const kwMap = {};
+    let totalAllLoss = 0;
+
+    rawData.forEach(r => {
+      const zutat = String(r[5] || '').trim();
+      if (!zutat) return;
+
+      const ym = String(r[15] || '2026-08');
+      const kw = String(r[2] || 'KW 01');
+      const kwKey = ym.substring(0, 4) + '-' + kw;
+      const employee = String(r[3] || '').trim();
+      const station = String(r[4] || 'Sonstige').trim();
+      const loss = parseFloat(r[11]) || 0;
+      const reason = String(r[12] || 'Sonstiges').trim();
+
+      totalAllLoss += loss;
+
+      if (!kwMap[kwKey]) {
+        kwMap[kwKey] = {
+          location: CONFIG.LOCATION_NAME,
+          kwKey: kwKey,
+          year: ym.substring(0, 4),
+          kw: kw,
+          totalLoss: 0,
+          foodLoss: 0,
+          beverageLoss: 0,
+          bookingCount: 0,
+          employees: new Set(),
+          stationLosses: {},
+          reasonLosses: {},
+          ingredientLosses: {}
+        };
+      }
+
+      const obj = kwMap[kwKey];
+      obj.totalLoss += loss;
+      obj.bookingCount++;
+      if (employee) obj.employees.add(employee);
+
+      if (station.includes('Sushi') || station.includes('Küche') || station.includes('Vorbereitung') || station.includes('Kühlhaus')) {
+        obj.foodLoss += loss;
+      } else if (station.includes('Bar') || station.includes('Service') || station.includes('Getränk')) {
+        obj.beverageLoss += loss;
+      } else {
+        obj.foodLoss += loss;
+      }
+
+      obj.stationLosses[station] = (obj.stationLosses[station] || 0) + loss;
+      obj.reasonLosses[reason] = (obj.reasonLosses[reason] || 0) + loss;
+      obj.ingredientLosses[zutat] = (obj.ingredientLosses[zutat] || 0) + loss;
+    });
+
+    const nowStr = Utilities.formatDate(new Date(), 'Europe/Berlin', 'dd.MM.yyyy HH:mm');
+
+    const summaryRows = Object.values(kwMap).map(kwObj => {
+      let topStation = '-', maxStationLoss = -1;
+      for (const [st, val] of Object.entries(kwObj.stationLosses)) {
+        if (val > maxStationLoss) { maxStationLoss = val; topStation = st; }
+      }
+
+      let topReason = '-', maxReasonLoss = -1;
+      for (const [re, val] of Object.entries(kwObj.reasonLosses)) {
+        if (val > maxReasonLoss) { maxReasonLoss = val; topReason = re; }
+      }
+
+      let topIngredient = '-', maxIngLoss = -1;
+      for (const [ing, val] of Object.entries(kwObj.ingredientLosses)) {
+        if (val > maxIngLoss) { maxIngLoss = val; topIngredient = ing + ` (${val.toFixed(2)} €)`; }
+      }
+
+      return [
+        kwObj.location,
+        kwObj.kwKey,
+        kwObj.year,
+        kwObj.kw,
+        Math.round(kwObj.totalLoss * 100) / 100,
+        Math.round(kwObj.foodLoss * 100) / 100,
+        Math.round(kwObj.beverageLoss * 100) / 100,
+        topStation,
+        topReason,
+        topIngredient,
+        kwObj.bookingCount,
+        Array.from(kwObj.employees).join(', '),
+        nowStr
+      ];
+    });
+
+    summaryRows.sort((a, b) => b[1].localeCompare(a[1], 'de'));
+
+    // Sona Hub öffnen & befüllen
+    const hubId = CONFIG.SONA_HUB_SPREADSHEET_ID || '1VZ2Q9tU3QcmVhYZRotYWkV-wgNwQFWsGZ6QLvH4goWE';
+    const hubSs = SpreadsheetApp.openById(hubId);
+    
+    // Weekly Tab
+    let hubWeeklySheet = hubSs.getSheetByName(CONFIG.SONA_HUB_TAB_WEEKLY || 'SCHWUND_SONA_KARLI');
+    if (!hubWeeklySheet) {
+      hubWeeklySheet = hubSs.insertSheet(CONFIG.SONA_HUB_TAB_WEEKLY || 'SCHWUND_SONA_KARLI');
+    }
+    hubWeeklySheet.clear();
+
+    hubWeeklySheet.getRange('A1:M1').merge()
+      .setValue('🏢 SONA HUB — WÖCHENTLICHES SCHWUND-CONTROLLING (STANDORT: ' + CONFIG.LOCATION_NAME.toUpperCase() + ')')
+      .setFontWeight('bold')
+      .setFontSize(13)
+      .setBackground('#1C1A18')
+      .setFontColor('#D4AF37')
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle');
+    hubWeeklySheet.setRowHeight(1, 40);
+
+    const weeklyHeaders = [
+      'Standort', 'Jahr_KW', 'Jahr', 'Kalenderwoche', 'Gesamtverlust Netto (€)', 
+      'Verlust Küche/Food (€)', 'Verlust Bar/Getränke (€)', 'Haupt-Verluststation', 
+      'Haupt-Verlustgrund', 'Top-Verlustartikel', 'Anzahl Buchungen', 
+      'Erfasste Mitarbeiter', 'Letzte Synchronisation'
+    ];
+
+    hubWeeklySheet.getRange(3, 1, 1, weeklyHeaders.length).setValues([weeklyHeaders]);
+    hubWeeklySheet.getRange('A3:M3').setFontWeight('bold').setBackground('#2A2621').setFontColor('#F5EBE1').setHorizontalAlignment('center').setWrap(true);
+    hubWeeklySheet.setRowHeight(3, 38);
+    hubWeeklySheet.setFrozenRows(3);
+
+    if (summaryRows.length > 0) {
+      hubWeeklySheet.getRange(4, 1, summaryRows.length, weeklyHeaders.length).setValues(summaryRows);
+      hubWeeklySheet.getRange(4, 5, summaryRows.length, 3).setNumberFormat('[$€-de-DE] #,##0.00');
+      hubWeeklySheet.getRange(4, 1, summaryRows.length, 4).setHorizontalAlignment('center');
+      hubWeeklySheet.getRange(4, 11, summaryRows.length, 1).setHorizontalAlignment('center');
+      hubWeeklySheet.getRange(4, 13, summaryRows.length, 1).setHorizontalAlignment('center');
+    }
+    hubWeeklySheet.autoResizeColumns(1, weeklyHeaders.length);
+
+    // Rohdaten-Tab
+    let hubRawSheet = hubSs.getSheetByName(CONFIG.SONA_HUB_TAB_RAW || 'SCHWUND_ROHDATEN_KARLI');
+    if (!hubRawSheet) {
+      hubRawSheet = hubSs.insertSheet(CONFIG.SONA_HUB_TAB_RAW || 'SCHWUND_ROHDATEN_KARLI');
+    }
+    hubRawSheet.clear();
+
+    hubRawSheet.getRange('A1:P1').merge()
+      .setValue('📋 SONA HUB — SCHWUND ROHDATEN LIVE-SPIEGEL (STANDORT: ' + CONFIG.LOCATION_NAME.toUpperCase() + ')')
+      .setFontWeight('bold')
+      .setFontSize(13)
+      .setBackground('#1C1A18')
+      .setFontColor('#D4AF37')
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle');
+    hubRawSheet.setRowHeight(1, 40);
+
+    const rawHeaders = [
+      'Eintrags-ID', 'Datum', 'KW', 'Erfasst von (Mitarbeiter)', 'Bereich / Station', 
+      'Master-Zutat / Artikel', 'Eingegebene Menge', 'Eingegebene Einheit', 
+      'Menge (Basiseinheit)', 'Basiseinheit', 'Einkaufspreis Netto (€ / Einheit)', 
+      'Gesamtverlust Netto (€)', 'Verlustgrund / Schwundkategorie', 'Status Preis', 
+      'Bemerkung / Maßnahme', 'Jahr_Monat'
+    ];
+
+    hubRawSheet.getRange(3, 1, 1, rawHeaders.length).setValues([rawHeaders]);
+    hubRawSheet.getRange('A3:P3').setFontWeight('bold').setBackground('#2A2621').setFontColor('#F5EBE1').setHorizontalAlignment('center').setWrap(true);
+    hubRawSheet.setRowHeight(3, 38);
+    hubRawSheet.setFrozenRows(3);
+
+    if (rawData.length > 0) {
+      hubRawSheet.getRange(4, 1, rawData.length, rawHeaders.length).setValues(rawData);
+      hubRawSheet.getRange('B4:B' + (rawData.length + 3)).setNumberFormat('dd.MM.yyyy');
+      hubRawSheet.getRange('G4:G' + (rawData.length + 3)).setNumberFormat('#,##0.00');
+      hubRawSheet.getRange('I4:I' + (rawData.length + 3)).setNumberFormat('#,##0.000');
+      hubRawSheet.getRange('K4:L' + (rawData.length + 3)).setNumberFormat('[$€-de-DE] #,##0.00');
+    }
+    hubRawSheet.autoResizeColumns(1, rawHeaders.length);
+
+    Logger.log(`SONA Hub Sync erfolgreich: ${summaryRows.length} KWs, ${rawData.length} Buchungen, ${totalAllLoss.toFixed(2)} €.`);
+  } catch (err) {
+    Logger.log('Fehler bei Sona Hub Sync: ' + err.toString());
+  }
+}
+
+/**
  * ==========================================
  * 3. ECHTZEIT-ALERTS BEI RECHNUNGS-TRIGGER (100% EMOJI-FREI)
  * ==========================================
@@ -8810,6 +9006,13 @@ function dailyInvoiceScan() {
     if (allBatchAlerts.length > 0) {
       sendRealtimeAlertEmail(allBatchAlerts, { lieferant: 'Sammel-Scan', rechnungsNr: 'Auto-Batch' });
     }
+  }
+
+  // Automatische Schwund-Synchronisation zum SONA Hub (wöchentlich / täglich bei Scan)
+  try {
+    syncSchwundDataFromRestaurantToSonaHub();
+  } catch (hubErr) {
+    Logger.log('SONA Hub Auto-Sync Hinweis: ' + hubErr.toString());
   }
 }
 
