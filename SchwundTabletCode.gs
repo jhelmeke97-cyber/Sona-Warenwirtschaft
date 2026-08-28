@@ -133,33 +133,33 @@ function setupStartButtonSheet() {
     .setValue('SONA KARLI — SCHWUNDERFASSUNG')
     .setFontWeight('bold')
     .setFontSize(16)
-    .setBackground('#1B365D')
-    .setFontColor('#FFFFFF')
+    .setBackground('#1C1A18')
+    .setFontColor('#D4AF37')
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle');
   startSheet.setRowHeight(2, 45);
 
-  const webAppUrl = 'https://script.google.com/macros/s/AKfycbwiFHFmRHoiZtjeskEi6dnyPZT_Ubk2cDM7ueazYys/exec';
+  const webAppUrl = 'https://script.google.com/macros/s/AKfycbx4nC6bTH4knJBm6ykRmKgstNz-WN_DxKb54f6b8F2D2o4Ofaz0CULogY-xGMav7zbh/exec';
 
-  // Riesiger Touch-Button mit Hyperlink (funktioniert auf Smartphone, Tablet und PC!)
+  // Riesiger Touch-Button im edlen Sona Warm-Braun / Gold Stil
   const buttonRange = startSheet.getRange('B4:H7');
   buttonRange.merge()
     .setFormula(`=HYPERLINK("${webAppUrl}"; "📱 HIER TIPPEN: SCHWUNDERFASSUNG ÖFFNEN")`)
     .setFontWeight('bold')
     .setFontSize(16)
-    .setBackground('#991B1B')
-    .setFontColor('#FFFFFF')
+    .setBackground('#3A2F24')
+    .setFontColor('#F5EBE1')
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle');
   
   startSheet.getRange('B9:H11').merge()
     .setValue(
       '💡 Anleitung für Mitarbeiter:\n' +
-      '• 📱 Auf Smartphone / Tablet: Tippe auf das rote Feld oben, um die Maske im Vollbild zu öffnen.\n' +
+      '• 📱 Auf Smartphone / Tablet: Tippe auf das Feld oben, um die Maske im Vollbild zu öffnen.\n' +
       '• 💻 Am PC / Browser: Klicke im Menü oben auf "🗑️ Schwunderfassung" -> "1. Tablet-Schnelleingabe öffnen".'
     )
     .setFontSize(11)
-    .setFontColor('#334155')
+    .setFontColor('#4A4237')
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle')
     .setWrap(true);
@@ -266,8 +266,8 @@ function setupSchwundNeuSheet() {
     .setValue('🗑️ SCHWUNDERFASSUNG (SONA KARLI — TABLET & MASTER-ZUTATEN ANBINDUNG)')
     .setFontWeight('bold')
     .setFontSize(13)
-    .setBackground('#7F1D1D')
-    .setFontColor('#FFFFFF')
+    .setBackground('#1C1A18')
+    .setFontColor('#D4AF37')
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle');
   sheet.setRowHeight(1, 40);
@@ -282,7 +282,7 @@ function setupSchwundNeuSheet() {
   ];
 
   sheet.getRange(3, 1, 1, headers.length).setValues([headers]);
-  sheet.getRange('A3:P3').setFontWeight('bold').setBackground('#1B365D').setFontColor('#FFFFFF').setHorizontalAlignment('center').setWrap(true);
+  sheet.getRange('A3:P3').setFontWeight('bold').setBackground('#2A2621').setFontColor('#F5EBE1').setHorizontalAlignment('center').setWrap(true);
   sheet.setRowHeight(3, 38);
   sheet.setFrozenRows(3);
 
@@ -537,33 +537,34 @@ function getTabletHtmlContent() {
       <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
       <style>
         * { box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f172a; margin: 0; padding: 12px; color: #1e293b; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; }
-        .container { width: 100%; max-width: 520px; background: #ffffff; border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); border: 1px solid #e2e8f0; }
-        .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #fee2e2; padding-bottom: 12px; margin-bottom: 16px; }
-        .header h2 { margin: 0; color: #991b1b; font-size: 1.35rem; display: flex; align-items: center; gap: 8px; }
-        .badge { font-size: 0.8rem; background: #fee2e2; color: #991b1b; padding: 4px 10px; border-radius: 8px; font-weight: 800; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #121110; margin: 0; padding: 12px; color: #F5EBE1; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; }
+        .container { width: 100%; max-width: 520px; background: #1C1A18; border-radius: 16px; padding: 22px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); border: 1.5px solid #38332D; }
+        .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #38332D; padding-bottom: 14px; margin-bottom: 18px; }
+        .header h2 { margin: 0; color: #F5EBE1; font-size: 1.35rem; display: flex; align-items: center; gap: 8px; font-weight: 800; letter-spacing: 0.5px; }
+        .badge { font-size: 0.8rem; background: #2E271F; color: #D4AF37; padding: 5px 12px; border-radius: 8px; font-weight: 800; border: 1px solid #5C4826; letter-spacing: 0.5px; }
         .form-row { margin-bottom: 14px; position: relative; }
-        label { display: block; font-weight: 700; margin-bottom: 6px; font-size: 0.88rem; color: #334155; }
-        label .req { color: #dc2626; margin-left: 2px; }
-        input, select, textarea { width: 100%; padding: 12px 14px; border: 2px solid #cbd5e1; border-radius: 10px; font-size: 1rem; background: #fff; transition: all 0.15s; }
-        input:focus, select:focus, textarea:focus { border-color: #991b1b; outline: none; box-shadow: 0 0 0 4px rgba(153, 27, 27, 0.15); }
-        .input-error { border-color: #ef4444 !important; background-color: #fef2f2 !important; }
-        .error-hint { color: #dc2626; font-size: 0.78rem; font-weight: 700; margin-top: 4px; display: none; }
+        label { display: block; font-weight: 700; margin-bottom: 6px; font-size: 0.88rem; color: #D9CDBF; }
+        label .req { color: #E06A55; margin-left: 2px; }
+        input, select, textarea { width: 100%; padding: 12px 14px; border: 2px solid #453D34; border-radius: 10px; font-size: 1rem; background: #272421; color: #F5EBE1; transition: all 0.15s; }
+        input::placeholder, textarea::placeholder { color: #8A7E70; opacity: 1; }
+        input:focus, select:focus, textarea:focus { border-color: #C5A059; outline: none; box-shadow: 0 0 0 4px rgba(197, 160, 89, 0.25); background: #2D2A26; }
+        .input-error { border-color: #E06A55 !important; background-color: #2D1E1C !important; }
+        .error-hint { color: #F87171; font-size: 0.78rem; font-weight: 700; margin-top: 4px; display: none; }
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .unit-buttons { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-        .unit-btn { flex: 1; min-width: 52px; padding: 10px 4px; background: #f8fafc; border: 2px solid #cbd5e1; border-radius: 10px; font-weight: 800; text-align: center; cursor: pointer; font-size: 0.9rem; transition: all 0.15s; user-select: none; }
-        .unit-btn.active { background: #991b1b; color: #ffffff; border-color: #991b1b; box-shadow: 0 2px 8px rgba(153,27,27,0.35); }
-        .unit-btn.disabled { opacity: 0.35; pointer-events: none; }
-        .new-product-box { background: #fffbeb; border: 1.5px solid #fde68a; border-radius: 10px; padding: 10px 12px; margin-top: 8px; display: none; font-size: 0.85rem; color: #92400e; }
-        .preview-box { background: #fef2f2; border: 2px dashed #f87171; border-radius: 12px; padding: 14px; text-align: center; margin: 16px 0; }
-        .preview-title { font-size: 0.8rem; font-weight: 800; color: #7f1d1d; letter-spacing: 0.5px; }
-        .preview-amount { font-size: 1.75rem; font-weight: 900; color: #991b1b; margin-top: 2px; }
-        .btn-submit { width: 100%; padding: 16px; background: #991b1b; color: #ffffff; border: none; border-radius: 12px; font-size: 1.15rem; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: all 0.15s; box-shadow: 0 4px 12px rgba(153,27,27,0.3); }
-        .btn-submit:hover { background: #7f1d1d; transform: translateY(-1px); }
-        .btn-submit:disabled { background: #94a3b8; cursor: not-allowed; transform: none; box-shadow: none; }
+        .unit-btn { flex: 1; min-width: 52px; padding: 11px 4px; background: #272421; border: 2px solid #453D34; border-radius: 10px; font-weight: 800; text-align: center; cursor: pointer; font-size: 0.9rem; color: #D9CDBF; transition: all 0.15s; user-select: none; }
+        .unit-btn.active { background: linear-gradient(135deg, #C5A059 0%, #8C6239 100%); color: #FFFFFF; border-color: #D4AF37; box-shadow: 0 2px 12px rgba(197,160,89,0.4); }
+        .unit-btn.disabled { opacity: 0.3; pointer-events: none; }
+        .new-product-box { background: #27221A; border: 1.5px solid #6E5325; border-radius: 10px; padding: 10px 12px; margin-top: 8px; display: none; font-size: 0.85rem; color: #E5C378; }
+        .preview-box { background: #24201B; border: 2px dashed #C5A059; border-radius: 12px; padding: 15px; text-align: center; margin: 18px 0; }
+        .preview-title { font-size: 0.8rem; font-weight: 800; color: #C5A059; letter-spacing: 0.8px; }
+        .preview-amount { font-size: 1.85rem; font-weight: 900; color: #F5EBE1; margin-top: 3px; }
+        .btn-submit { width: 100%; padding: 16px; background: linear-gradient(135deg, #C5A059 0%, #8C6239 100%); color: #FFFFFF; border: none; border-radius: 12px; font-size: 1.15rem; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: all 0.15s; box-shadow: 0 4px 16px rgba(197,160,89,0.35); }
+        .btn-submit:hover { background: linear-gradient(135deg, #D4AF37 0%, #9B783E 100%); transform: translateY(-1px); }
+        .btn-submit:disabled { background: #35302A; color: #73695D; cursor: not-allowed; transform: none; box-shadow: none; }
         .status-msg { margin-top: 14px; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.95rem; text-align: center; display: none; }
-        .status-msg.success { background: #dcfce7; color: #166534; display: block; border: 1.5px solid #86efac; }
-        .status-msg.error { background: #fee2e2; color: #991b1b; display: block; border: 1.5px solid #fca5a5; }
+        .status-msg.success { background: #182C1F; color: #6EE7B7; display: block; border: 1.5px solid #285437; }
+        .status-msg.error { background: #301B1B; color: #FCA5A5; display: block; border: 1.5px solid #662B2B; }
       </style>
     </head>
     <body>
@@ -582,7 +583,7 @@ function getTabletHtmlContent() {
             </div>
             <div class="form-row">
               <label>👤 Mitarbeiter <span class="req">*</span></label>
-              <input type="text" id="employeeInput" placeholder="Name / Kürzel (z. B. Julia, Alex)" required oninput="validateFields()">
+              <input type="text" id="employeeInput" placeholder="Name / Kürzel (z. B. Nate, Minh, Julian)" required oninput="validateFields()">
               <div id="errEmployee" class="error-hint">Name eingeben</div>
             </div>
           </div>
@@ -651,7 +652,7 @@ function getTabletHtmlContent() {
           <div class="preview-box">
             <div class="preview-title">BERECHNETER SCHWUND-VERLUST</div>
             <div class="preview-amount" id="previewAmount">0,00 €</div>
-            <div id="previewDetails" style="font-size: 0.8rem; color: #64748b; margin-top: 4px;">Bitte alle Pflichtfelder ausfüllen</div>
+            <div id="previewDetails" style="font-size: 0.8rem; color: #A89B8C; margin-top: 4px;">Bitte alle Pflichtfelder ausfüllen</div>
           </div>
 
           <button type="submit" class="btn-submit" id="submitBtn">
