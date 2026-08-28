@@ -666,12 +666,10 @@ function getTabletHtmlContent() {
         const masterIngredients = ${JSON.stringify(ingredients)};
         const pieceWeights = ${JSON.stringify(AVERAGE_PIECE_WEIGHTS)};
 
-        // Letzten Mitarbeiter-Namen aus LocalStorage laden
+        // Mitarbeiterfeld immer leer initialisieren
         window.addEventListener('DOMContentLoaded', () => {
-          const savedEmp = localStorage.getItem('sona_last_employee');
-          if (savedEmp) {
-            document.getElementById('employeeInput').value = savedEmp;
-          }
+          try { localStorage.removeItem('sona_last_employee'); } catch(e) {}
+          document.getElementById('employeeInput').value = '';
           validateFields();
         });
 
@@ -849,7 +847,6 @@ function getTabletHtmlContent() {
           msg.style.display = 'none';
 
           const emp = document.getElementById('employeeInput').value.trim();
-          localStorage.setItem('sona_last_employee', emp);
 
           const payload = {
             date: document.getElementById('entryDate').value,
@@ -870,6 +867,7 @@ function getTabletHtmlContent() {
               if (res.success) {
                 msg.className = 'status-msg success';
                 msg.innerText = '✅ Gebucht: ' + res.ingredient + ' (' + res.totalLoss.toFixed(2) + ' €) unter ID ' + res.entryId;
+                document.getElementById('employeeInput').value = '';
                 document.getElementById('ingredientInput').value = '';
                 document.getElementById('quantityInput').value = '';
                 document.getElementById('noteInput').value = '';
