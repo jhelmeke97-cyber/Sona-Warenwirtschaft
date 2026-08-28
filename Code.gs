@@ -7987,7 +7987,8 @@ function cleanupGarbageArticlesFromDatabase() {
 
       // Warengruppe und Kategorie neu validieren & korrigieren
       const currentWg = String(data[i][2] || '').trim();
-      const properWg = matchWarengruppe(artName);
+      const supplier = String(data[i][5] || '').trim();
+      const properWg = matchWarengruppe(artName, supplier);
       
       if (properWg && properWg !== currentWg) {
         const wgInfo = getWarengruppenInfo(properWg);
@@ -8679,9 +8680,39 @@ function refreshSupplierDropdowns(ss) {
   }
 }
 
-function matchWarengruppe(name) {
+function matchWarengruppe(name, supplier) {
   const n = (name || '').toLowerCase();
-  
+  const s = (supplier || '').toLowerCase();
+
+  // 1. Leergut / Pfand (höchste Priorität)
+  if (/\b(?:leergut|pfand|fasspfand|kastenpfand|kistenpfand|pfandfaß|pfandfass|mw leergut|flaschenpfand|containerpfand|pfandwert)\b/i.test(n)) {
+    return 'LG: Leergut / Pfand';
+  }
+
+  // 2. Lieferanten-Spezifische Direkt-Zuweisung
+  if (s.includes('weinkönner') || s.includes('weinkoenner')) {
+    return 'E14: Wein';
+  }
+  if (s.includes('kreta')) {
+    return 'E22: Öl/Essig';
+  }
+  if (s.includes('stephan')) {
+    if (/\b(?:garnelen|shrimps|prawns|black\s*tiger|ebi|oktopus|octopus|squid|calamari|tintenfisch|surimi|tobiko|masago|rogen|unagi|aal|muscheln|jakobsmuscheln)\b/i.test(n)) {
+      return 'E2: Seafood';
+    }
+    return 'E1: Fisch';
+  }
+  if (s.includes('korte')) {
+    if (/\b(?:schwein|bauch|pork|kassler|speck|bacon)\b/i.test(n)) return 'E5: Schwein';
+    if (/\b(?:hähnchen|huhn|pute|chicken|ente|gans)\b/i.test(n)) return 'E3: Geflügel';
+    return 'E4: Rind';
+  }
+  if (s.includes('sülo') || s.includes('sulo') || s.includes('havel')) {
+    if (/\b(?:öl|essig)\b/i.test(n)) return 'E22: Öl/Essig';
+    if (/\b(?:sauce|paste|soße)\b/i.test(n)) return 'E11: Soße/Paste';
+    return 'E8: Gemüse/Salat/Obst';
+  }
+
   if (typeof MASTER_CATALOG_DICTIONARY !== 'undefined') {
     for (let i = 0; i < MASTER_CATALOG_DICTIONARY.length; i++) {
       const item = MASTER_CATALOG_DICTIONARY[i];
@@ -8694,52 +8725,49 @@ function matchWarengruppe(name) {
     }
   }
 
-  // 1. Leergut / Pfand
-  if (/\b(?:leergut|pfand|fasspfand|kastenpfand|kistenpfand|pfandfaß|pfandfass|mw leergut|flaschenpfand|containerpfand|pfandwert)\b/i.test(n)) {
-    return 'LG: Leergut / Pfand';
-  }
-
-  // 2. Fisch & Seafood (vor Bier wegen Tiger Garnelen!)
+  // 3. Fisch & Seafood (vor Bier wegen Tiger Garnelen!)
   if (/\b(?:garnelen|shrimps|prawns|black\s*tiger|ebi|oktopus|octopus|squid|calamari|tintenfisch|surimi|tobiko|masago|rogen|unagi|aal|muscheln|jakobsmuscheln)\b/i.test(n)) return 'E2: Seafood';
   if (/\b(?:lachs|lachsfilet|salmon|dorade|doraden|thunfisch|tuna|kingfish|makrele|zander|kabeljau|hamachi|heilbutt|butterfisch|forelle|seeteufel|saibling|matjes)\b/i.test(n)) return 'E1: Fisch';
 
-  // 3. Fleisch
+  // 4. Fleisch
   if (/\b(?:pute|puten|putenbrust|hähnchen|huhn|chicken|ente|enten|duck|gans)\b/i.test(n)) return 'E3: Geflügel';
   if (/\b(?:rind|rinder|entrecote|ribeye|roastbeef|filet|beef|ochsen)\b/i.test(n)) return 'E4: Rind';
   if (/\b(?:schwein|schweine|pork|bauch|kassler|speck|bacon)\b/i.test(n)) return 'E5: Schwein';
 
-  // 4. Sirup & Bar
+  // 5. Wein & Schaumwein (inkl. aller Rebsorten)
+  if (/\b(?:wein|riesling|burgunder|merlot|rosato|grauburgunder|weissburgunder|weißburgunder|spätburgunder|veltliner|grüner veltliner|sauvignon|chardonnay|primitivo|lugana|pinot|rioja|chianti|prosecco|cava|champagner|crémant|frizzante|sekt|rosé|rotwein|weißwein|weisswein|cuvee|cuvée|shiraz|syrah|tempranillo|barolo|brunello|amarone|nebbiolo|montepulciano|soave|gavi|valpolicella|chablis|bordeaux)\b/i.test(n)) return 'E14: Wein';
+
+  // 6. Sirup & Bar
   if (/\b(?:monin|giffard|barsirup|sirup|cordial|riemerschmidt)\b/i.test(n)) return 'E25: Sirup';
 
-  // 5. Spirituosen & Sake & Wein & Bier & Softdrinks
+  // 7. Spirituosen & Sake & Bier & Softdrinks
   if (/\b(?:sake|junmai|daiginjo|taruzake|nihonshu)\b/i.test(n)) return 'E16: Sake';
   if (/\b(?:bier|pils|helles|oberbräu|weissbier|radler|kirin|asahi|sapporo|tiger\s*beer|tiger\s*bier|fassbier)\b/i.test(n)) return 'E15: Bier';
-  if (/\b(?:wein|riesling|burgunder|merlot|rosato|grauburgunder|weissburgunder|rotwein|weißwein|prosecco|frizzante|champagner|sekt|chardonnay|sauvignon|primitivo)\b/i.test(n)) return 'E14: Wein';
   if (/\b(?:gin|vodka|wodka|rum|whisky|whiskey|tequila|likör|aperol|lillet|bitter|campari)\b/i.test(n)) return 'E13: Spirituose';
   if (/\b(?:coca\s*cola|cola|zero|light|sprite|fanta|spezi|mezzomix|red\s*bull|saft|schorle|tonic|ginger\s*ale|mineralwasser|wasser|limonade|vöslauer|gerolsteiner|san\s*pellegrino)\b/i.test(n)) return 'E18: Softdrinks/Saft';
   if (/\b(?:tee|jasmintee|gruentee|grüntee|matcha|sencha|genmaicha|oolong|kamillentee|pfefferminztee)\b/i.test(n)) return 'E19: Tee';
   if (/\b(?:kaffee|espresso|kaffeebohnen|cappuccino)\b/i.test(n)) return 'E20: Kaffee';
 
-  // 6. Tofu, Reis & Nudeln
+  // 8. Tofu, Reis & Nudeln
   if (/\b(?:tofu|saitan|seitan|tempeh|sojabohnenquark)\b/i.test(n)) return 'E6: Tofu & Saitan';
   if (/\b(?:reis|sushireis|jasminreis|basmati|nudeln|noodles|ramen|udon|soba|glasnudeln|reisnudeln|pho)\b/i.test(n)) return 'E7: Reis/Nudeln';
 
-  // 7. Frische Kräuter & Gemüse & Obst
+  // 9. Frische Kräuter & Gemüse & Obst
   if (/\b(?:gurke|gurken|salatgurke|salatgurken|tomate|tomaten|cherrytomaten|avocado|avocados|lauch|lauchzwiebeln|frühlingszwiebeln|zwiebel|zwiebeln|knoblauch|ingwer|limette|limetten|zitrone|zitronen|paprika|aubergine|auberginen|zucchini|koriander|minze|basilikum|kresse|daikon|rettich|möhre|karotte|salat|eisberg|rucola|spinat|sprossen|pilze|champignons|shiitake|mango|ananas|erdbeeren|litschi|lychee|banane|orange)\b/i.test(n)) return 'E8: Gemüse/Salat/Obst';
 
-  // 8. Tiefkühl & Convenience
+  // 10. Tiefkühl & Convenience
   if (/\b(?:hao kao|dim sum|gyoza|wan tan|frühlingsrolle|spring roll|edamame|tiefkühl|tk\b|frozen)\b/i.test(n)) return 'E10: Tiefkühl';
 
-  // 9. Soßen & Pasten
+  // 11. Soßen & Pasten
   if (/\b(?:knoblauchpüree|ingwerpüree|püree|puree|sauce|soße|paste|mayo|mayonnaise|wasabi|shoyu|sojasauce|meerrettich|teriyaki|ponzu|sriracha|sambal|chili paste|curry paste|hoisin|unagi sauce|austernsauce|fischsauce|sesampaste|tahini|miso)\b/i.test(n)) return 'E11: Soße/Paste';
 
-  // 10. Öle & Essige
+  // 12. Öle & Essige
   if (/\b(?:öl|oil|pflanzenöl|sonnenblumenöl|sesamöl|olivenöl|frittieröl|essig|vinegar|reisessig|branntweinessig|suehiro)\b/i.test(n)) return 'E22: Öl/Essig';
 
-  // 11. Milchprodukte
+  // 13. Milchprodukte
   if (/\b(?:milch|sahne|butter|käse|cheese|frischkäse|joghurt|kokosmilch|kondensmilch)\b/i.test(n)) return 'E12: Milchprodukte';
 
-  // 12. Nonfood & Hygiene
+  // 14. Nonfood & Hygiene
   if (/\b(?:handschuh|handschuhe|serviette|servietten|alufolie|frischhaltefolie|becher|deckel|schale|tragetasche|strohhalm|spieß|stäbchen|essstäbchen|bambusstäbchen|tüte|verpackung|papier|spritzbeutel|gefrierbeutel|rollen|spülmittel|reiniger|fettlöser|seife|hygiene|tork|zewa|wischtuch|mülltüte|müllbeutel|nonfood)\b/i.test(n)) return 'E24: Nonfood';
 
   return 'E9: Nährmittel/Gewürz';
