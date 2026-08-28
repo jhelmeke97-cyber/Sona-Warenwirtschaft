@@ -591,6 +591,39 @@ function normalizeUnitAndPrice(name, gebinde, menge, einzelpreis, artId) {
     }
   }
 
+  // 4. Standard-Stückgewichte für Gastronomie-Frischeprodukte (z. B. Gurke = 350g -> kg-Preis)
+  const STANDARD_PIECE_WEIGHTS = [
+    { match: /\b(?:gurke|gurken|salatgurke)\b/i, weightKg: 0.35, unit: 'kg' },
+    { match: /\b(?:aubergine|auberginen)\b/i, weightKg: 0.30, unit: 'kg' },
+    { match: /\b(?:avocado|avocados)\b/i, weightKg: 0.20, unit: 'kg' },
+    { match: /\b(?:limette|limetten)\b/i, weightKg: 0.075, unit: 'kg' },
+    { match: /\b(?:zitrone|zitronen)\b/i, weightKg: 0.12, unit: 'kg' },
+    { match: /\b(?:lauchzwiebel|lauchzwiebeln|frühlingszwiebel)\b/i, weightKg: 0.15, unit: 'kg' },
+    { match: /\b(?:radieschen)\b/i, weightKg: 0.15, unit: 'kg' },
+    { match: /\b(?:rettich|takuan)\b/i, weightKg: 0.50, unit: 'kg' },
+    { match: /\b(?:ingwer)\b/i, weightKg: 0.15, unit: 'kg' },
+    { match: /\b(?:knoblauch)\b/i, weightKg: 0.05, unit: 'kg' },
+    { match: /\b(?:spitzkohl|weißkohl|rotkohl)\b/i, weightKg: 0.80, unit: 'kg' },
+    { match: /\b(?:eisbergsalat|kopfsalat|salatkopf)\b/i, weightKg: 0.40, unit: 'kg' },
+    { match: /\b(?:wassermelone)\b/i, weightKg: 4.0, unit: 'kg' },
+    { match: /\b(?:honigmelone|cantaloupe)\b/i, weightKg: 1.2, unit: 'kg' },
+    { match: /\b(?:ananas)\b/i, weightKg: 1.2, unit: 'kg' },
+    { match: /\b(?:mango)\b/i, weightKg: 0.35, unit: 'kg' },
+    { match: /\b(?:paprika|spitzpaprika)\b/i, weightKg: 0.15, unit: 'kg' },
+    { match: /\b(?:koriander|minze|basilikum|dill|petersilie|schnittlauch)\b/i, weightKg: 0.10, unit: 'kg' }
+  ];
+
+  if (basiseinheit === 'Stk' || basiseinheit === '') {
+    for (let pw of STANDARD_PIECE_WEIGHTS) {
+      if (pw.match.test(combined)) {
+        const pieceCount = (totalInhalt && totalInhalt > 0) ? totalInhalt : 1;
+        totalInhalt = pieceCount * pw.weightKg;
+        basiseinheit = pw.unit;
+        break;
+      }
+    }
+  }
+
   if (totalInhalt === null || totalInhalt <= 0) {
     totalInhalt = (menge && menge > 0) ? menge : 1;
   }
