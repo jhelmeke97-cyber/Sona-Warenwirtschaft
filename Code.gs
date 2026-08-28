@@ -701,15 +701,16 @@ function onOpen() {
     .addSeparator()
     .addItem('6. 📋 Prüfliste (PRUEFUNG_EINKAUF) öffnen & aktualisieren', 'generatePrueflisteManual')
     .addItem('7. 💾 Korrekturen aus Prüfliste anwenden & dauerhaft speichern', 'applyUserCorrectionsFromPruefliste')
-    .addItem('8. 🩺 Vollständigen Diagnose-Bericht für KI-Optimierung anzeigen', 'showDiagnosticReportAssistant')
+    .addItem('8. 🧹 Fehlerhafte Artikel & Müll-Zeilen JETZT bereinigen', 'cleanupGarbageArticlesFromDatabase')
+    .addItem('9. 🩺 Vollständigen Diagnose-Bericht für KI-Optimierung anzeigen', 'showDiagnosticReportAssistant')
     .addSeparator()
-    .addItem('9. 🔍 Plausibilitäts-Audit (Health-Check) ausführen', 'runManualHealthAudit')
-    .addItem('10. 📁 Google Drive Rechnungsordner Verbindung testen', 'checkDriveFolderConnection')
-    .addItem('11. Automatisierung (Täglich 12:00 + Freitags) aktivieren', 'setupAutomatedTriggers')
-    .addItem('12. Freitags-Wochenbericht per Email testen', 'testSendWeeklyReport')
+    .addItem('10. 🔍 Plausibilitäts-Audit (Health-Check) ausführen', 'runManualHealthAudit')
+    .addItem('11. 📁 Google Drive Rechnungsordner Verbindung testen', 'checkDriveFolderConnection')
+    .addItem('12. Automatisierung (Täglich 12:00 + Freitags) aktivieren', 'setupAutomatedTriggers')
+    .addItem('13. Freitags-Wochenbericht per Email testen', 'testSendWeeklyReport')
     .addSeparator()
-    .addItem('13. Nächste freie Artikel-ID generieren', 'promptNextArticleId')
-    .addItem('14. Preisabweichungen prüfen', 'checkPriceAnomalies')
+    .addItem('14. Nächste freie Artikel-ID generieren', 'promptNextArticleId')
+    .addItem('15. Preisabweichungen prüfen', 'checkPriceAnomalies')
     .addToUi();
 }
 
@@ -6434,7 +6435,7 @@ function ingestInvoiceData(ss, invoiceData, fileName) {
         realtimeAlerts.push({
           type: 'GUTSCHRIFT_STORNO',
           title: 'Gutschrift / Stornobuchung erfasst',
-          details: `Artikel "${item.name}" (Menge: ${item.menge}) mit 0,00 EUR verbucht. Mengengerüst saldiert, Referenzpreis bleibt stabil.`
+          details: `[${existing.id || artId}] Artikel "${item.name}" (Menge: ${item.menge}) mit 0,00 EUR verbucht. Mengengerüst saldiert.`
         });
       } else if (existing.refPrice > 0 && norm.referenzpreis > 0) {
         const diffPct = Math.abs((norm.referenzpreis - existing.refPrice) / existing.refPrice) * 100;
@@ -6442,7 +6443,7 @@ function ingestInvoiceData(ss, invoiceData, fileName) {
           realtimeAlerts.push({
             type: 'EXTREME_PREISABWEICHUNG',
             title: 'Extreme Preisabweichung (> 30%)',
-            details: `Artikel "${item.name}" (${invoiceData.lieferant}): Bisher ${existing.refPrice.toFixed(2)} EUR/${norm.basiseinheit} -> Neu ${norm.referenzpreis.toFixed(2)} EUR/${norm.basiseinheit} (${diffPct > 0 ? '+' : ''}${diffPct.toFixed(1)}%). Bitte Gebinde prüfen.`
+            details: `[${existing.id || artId}] Artikel "${item.name}" (${invoiceData.lieferant}): Bisher ${existing.refPrice.toFixed(2)} EUR/${norm.basiseinheit} -> Neu ${norm.referenzpreis.toFixed(2)} EUR/${norm.basiseinheit} (${diffPct > 0 ? '+' : ''}${diffPct.toFixed(1)}%). Bitte Gebinde prüfen.`
           });
         }
       }
@@ -6459,7 +6460,7 @@ function ingestInvoiceData(ss, invoiceData, fileName) {
             realtimeAlerts.push({
               type: 'PREISANSTIEG',
               title: 'Preisanstieg +' + (diffPct * 100).toFixed(1) + '%',
-              details: 'Artikel "' + item.name + '" (' + invoiceData.lieferant + '): Preis stieg von ' + oldPrice.toFixed(2) + ' EUR auf ' + item.einzelNetto.toFixed(2) + ' EUR (Referenz: ' + norm.referenzpreis.toFixed(2) + ' EUR/' + norm.basiseinheit + ').'
+              details: `[${existing.id || artId}] Artikel "${item.name}" (${invoiceData.lieferant}): Preis stieg von ${oldPrice.toFixed(2)} EUR auf ${item.einzelNetto.toFixed(2)} EUR (Referenz: ${norm.referenzpreis.toFixed(2)} EUR/${norm.basiseinheit}).`
             });
           }
           
@@ -6521,8 +6522,6 @@ function ingestInvoiceData(ss, invoiceData, fileName) {
         lastDate: bookingDate,
         note: invoiceData.rechnungsNr
       };
-
-      // Neuer Artikel wird vollautomatisch ohne Email-Spam im Artikelstamm angelegt
     }
 
     const totalMengeBasiseinheit = Math.round(item.menge * (norm.inhalt || 1) * 1000) / 1000;
@@ -6556,14 +6555,10 @@ function ingestInvoiceData(ss, invoiceData, fileName) {
     recSheet.getRange(startRecRow, 1, newInvoiceRows.length, newInvoiceRows[0].length).setValues(newInvoiceRows);
   }
 
-  syncMasterZutatenFromArticles(ss);
-  refreshSupplierDropdowns(ss);
-
-  if (realtimeAlerts.length > 0) {
-    sendRealtimeAlertEmail(realtimeAlerts, invoiceData);
-  }
-
-  return newInvoiceRows.length;
+  return {
+    count: newInvoiceRows.length,
+    alerts: realtimeAlerts
+  };
 }
 
 /**
@@ -7841,8 +7836,14 @@ function dailyInvoiceScan() {
   
   const files = folder.getFiles();
   let count = 0;
+  const startTime = Date.now();
+  const allBatchAlerts = [];
   
   while (files.hasNext()) {
+    if (Date.now() - startTime > 260000) {
+      Logger.log('Zeitlimit erreicht - verbleibende Belege werden im nächsten Durchlauf verarbeitet.');
+      break;
+    }
     const file = files.next();
     const fileName = file.getName();
     const mimeType = file.getMimeType();
@@ -7851,10 +7852,17 @@ function dailyInvoiceScan() {
       try {
         const ocrText = performGoogleOcr(file);
         const invoiceData = parseInvoiceText(ocrText, fileName);
-        ingestInvoiceData(ss, invoiceData, fileName);
-        file.moveTo(archiveFolder);
-        count++;
-        Logger.log('Beleg verbucht & archiviert: ' + fileName);
+        if (invoiceData.items && invoiceData.items.length > 0) {
+          const res = ingestInvoiceData(ss, invoiceData, fileName);
+          if (res.alerts && res.alerts.length > 0) {
+            allBatchAlerts.push(...res.alerts);
+          }
+          file.moveTo(archiveFolder);
+          count++;
+          Logger.log('Beleg verbucht & archiviert: ' + fileName);
+        } else {
+          Logger.log('Keine gültigen Positionen in ' + fileName + ' gefunden - überspringe.');
+        }
       } catch (err) {
         Logger.log('Fehler beim Beleg ' + fileName + ': ' + err.toString());
       }
@@ -7864,8 +7872,13 @@ function dailyInvoiceScan() {
   if (count > 0) {
     updateDashboardFigures(ss);
     syncMasterZutatenFromArticles(ss);
+    refreshSupplierDropdowns(ss);
     generatePruefliste(ss);
     Logger.log(count + ' neue Belege erfolgreich verbucht, Master-Zutaten und Prüfliste aktualisiert.');
+
+    if (allBatchAlerts.length > 0) {
+      sendRealtimeAlertEmail(allBatchAlerts, { lieferant: 'Sammel-Scan', rechnungsNr: 'Auto-Batch' });
+    }
   }
 }
 
@@ -7898,8 +7911,15 @@ function triggerManualInvoiceScan() {
   const processedFiles = [];
   let totalItemsCount = 0;
   const errors = [];
+  const allBatchAlerts = [];
+  const startTime = Date.now();
+  let timeoutReached = false;
   
   while (files.hasNext()) {
+    if (Date.now() - startTime > 260000) {
+      timeoutReached = true;
+      break;
+    }
     const file = files.next();
     const fileName = file.getName();
     const mimeType = file.getMimeType();
@@ -7908,10 +7928,17 @@ function triggerManualInvoiceScan() {
       try {
         const ocrText = performGoogleOcr(file);
         const invoiceData = parseInvoiceText(ocrText, fileName);
-        const itemsBooked = ingestInvoiceData(ss, invoiceData, fileName);
-        file.moveTo(archiveFolder);
-        processedFiles.push(`• ${fileName} (${invoiceData.lieferant}, ${invoiceData.items.length} Positionen)`);
-        totalItemsCount += itemsBooked;
+        if (invoiceData.items && invoiceData.items.length > 0) {
+          const res = ingestInvoiceData(ss, invoiceData, fileName);
+          totalItemsCount += res.count;
+          if (res.alerts && res.alerts.length > 0) {
+            allBatchAlerts.push(...res.alerts);
+          }
+          file.moveTo(archiveFolder);
+          processedFiles.push(`• ${fileName} (${invoiceData.lieferant}, ${invoiceData.items.length} Positionen)`);
+        } else {
+          errors.push(`• ${fileName}: Keine gültigen Artikelpositionen erkannt`);
+        }
       } catch (err) {
         errors.push(`• ${fileName}: ${err.toString()}`);
       }
@@ -7921,13 +7948,22 @@ function triggerManualInvoiceScan() {
   if (processedFiles.length > 0) {
     updateDashboardFigures(ss);
     syncMasterZutatenFromArticles(ss);
+    refreshSupplierDropdowns(ss);
     generatePruefliste(ss);
+
+    if (allBatchAlerts.length > 0) {
+      sendRealtimeAlertEmail(allBatchAlerts, { lieferant: 'Sammel-Scan', rechnungsNr: 'Manueller Scan' });
+    }
+
     let msg = `Erfolgreich ${processedFiles.length} Belege eingelesen & verbucht:\n\n`;
     msg += processedFiles.join('\n') + `\n\n`;
     msg += `Insgesamt ${totalItemsCount} Positionen in RECHNUNGSEINGANG, ARTIKELSTAMM und MASTER_ZUTATEN eingepflegt.\n\n`;
     msg += `Die Dateien wurden zur Archivierung in den Unterordner "${CONFIG.ARCHIVE_FOLDER_NAME}" verschoben.`;
+    if (timeoutReached) {
+      msg += `\n\n⏱️ Zeitlimit erreicht: Ein Teil der Belege wurde verbucht. Bitte starte den Scan erneut, um die restlichen Dateien einzulesen.`;
+    }
     if (errors.length > 0) {
-      msg += `\n\nHinweise / Fehler:\n` + errors.join('\n');
+      msg += `\n\nHinweise / Unlesbare Dateien:\n` + errors.join('\n');
     }
     ui.alert('Manueller Beleg-Scan abgeschlossen', msg, ui.ButtonSet.OK);
   } else {
@@ -7939,6 +7975,61 @@ function triggerManualInvoiceScan() {
       ui.ButtonSet.OK
     );
   }
+}
+
+/**
+ * 8. DATENBANK-CLEANUP: BEREINIGUNG VON FEHLERHAFTEN / MÜLL-ARTIKELN
+ */
+function cleanupGarbageArticlesFromDatabase() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById(CONFIG.SHEET_ID);
+  const artSheet = ss.getSheetByName(CONFIG.NAME_ARTIKEL);
+  const recSheet = ss.getSheetByName(CONFIG.NAME_RECHNUNGEN);
+  const ui = SpreadsheetApp.getUi();
+  
+  let deletedArtCount = 0;
+  let deletedRecCount = 0;
+
+  // 1. ARTIKELSTAMM bereinigen (von unten nach oben)
+  if (artSheet && artSheet.getLastRow() >= 5) {
+    const lastRow = artSheet.getLastRow();
+    const data = artSheet.getRange(5, 1, lastRow - 4, 2).getValues();
+    for (let i = data.length - 1; i >= 0; i--) {
+      const artName = String(data[i][1] || '').trim();
+      if (!isValidArticleName(artName)) {
+        artSheet.deleteRow(5 + i);
+        deletedArtCount++;
+      }
+    }
+  }
+
+  // 2. RECHNUNGSEINGANG bereinigen (von unten nach oben)
+  if (recSheet && recSheet.getLastRow() > 1) {
+    const lastRow = recSheet.getLastRow();
+    const data = recSheet.getRange(2, 7, lastRow - 1, 1).getValues(); // Spalte 7: Artikelbezeichnung
+    for (let i = data.length - 1; i >= 0; i--) {
+      const artName = String(data[i][0] || '').trim();
+      if (!isValidArticleName(artName)) {
+        recSheet.deleteRow(2 + i);
+        deletedRecCount++;
+      }
+    }
+  }
+
+  // 3. MASTER_ZUTATEN neu synchronisieren & Prüfliste aktualisieren
+  syncMasterZutatenFromArticles(ss);
+  generatePruefliste(ss);
+  updateDashboardFigures(ss);
+  refreshSupplierDropdowns(ss);
+
+  const msg = `Datenbank erfolgreich bereinigt:\n\n` +
+              `• ${deletedArtCount} fehlerhafte Müll-Artikel aus dem ARTIKELSTAMM gelöscht\n` +
+              `• ${deletedRecCount} fehlerhafte Zeilen aus dem RECHNUNGSEINGANG gelöscht\n` +
+              `• MASTER_ZUTATEN und PRUEFUNG_EINKAUF wurden vollständig bereinigt und neu synchronisiert.`;
+  
+  if (ui) {
+    ui.alert('Bereinigung abgeschlossen', msg, ui.ButtonSet.OK);
+  }
+  return { deletedArtCount, deletedRecCount };
 }
 
 function performGoogleOcr(file) {
@@ -8081,41 +8172,59 @@ function extractSupplier(text, lines, fileName) {
 
 function cleanArticleName(name) {
   let clean = (name || '').trim();
-  clean = clean.replace(/^(packung|karton|sack|stück|stk|pack|pkg|flasche|bund|kiste|dose|glas|palette|colli|gebinde|beutel|schale)\s+/i, '');
-  clean = clean.replace(/\s+(packung|karton|sack|stück|stk|pack|pkg|flasche|bund|kiste|dose|glas|palette|colli|gebinde|beutel|schale)$/i, '');
-  clean = clean.replace(/^(\d{1,6}|\d{1,3}[\.\-]\d{1,3})\s+/, '');
+  clean = clean.replace(/^[\s\-\.\:\;\_\*\#\~\/\|\+\,]+/, '');
+  clean = clean.replace(/[\s\-\.\:\;\_\*\#\~\/\|\+\,]+$/, '');
+  clean = clean.replace(/^(?:packung|karton|sack|stück|stk|pack|pkg|flasche|bund|kiste|dose|glas|palette|colli|gebinde|beutel|schale)\s+/i, '');
+  clean = clean.replace(/\s+(?:packung|karton|sack|stück|stk|pack|pkg|flasche|bund|kiste|dose|glas|palette|colli|gebinde|beutel|schale)$/i, '');
+  clean = clean.replace(/^[A-Z0-9]{1,8}[\-\.\/][A-Z0-9]{1,8}\s+/, '');
+  clean = clean.replace(/^(\d{1,8})\s+/, '');
   clean = clean.replace(/[\*\#\_\~\|\:\;\"]/g, ' ').replace(/\s+/g, ' ').trim();
   return clean;
 }
 
 function isValidArticleName(name) {
-  if (!name || name.length < 3) return false;
-  const lower = name.toLowerCase().trim();
-  
-  const blacklist = [
-    'karton', 'sack', 'packung', 'stück', 'stk', 'pack', 'pkg', 'flasche', 'bund',
-    'kiste', 'dose', 'glas', 'palette', 'colli', 'gebinde', 'beutel', 'schale',
-    'gesamt', 'summe', 'total', 'netto', 'brutto', 'mwst', 'steuer', 'zahlbetrag',
-    'zwischensumme', 'übertrag', 'skonto', 'rechnung', 'beleg', 'lieferschein',
-    'datum', 'art-nr', 'artnr', 'artikel', 'bezeichnung', 'pos', 'menge', 'einheit',
-    'einzelpreis', 'gesamtpreis', 'preis', 'ust', 'kunde', 'sona', 'vietnamese'
-  ];
+  if (!name) return false;
+  const clean = cleanArticleName(name);
+  if (clean.length < 3) return false;
 
-  if (blacklist.includes(lower)) return false;
-  if (/^[\d\s\.\,\-\/\%\€]+$/.test(name)) return false;
-  if (/^\d{1,2}[\.\/]\d{1,2}([\.\/]\d{2,4})?$/.test(name)) return false;
+  const lower = clean.toLowerCase();
+
+  // 1. Blacklist gegen Währungen, Steuern, Summen, administrative Begriffe
+  const blacklistRegex = /^(?:eur|euro|usd|chf|\- eur|\- b|\- a|a|b|c|d|1|2|3|4|5|6|7|8|9|0|mwst|ust|ust\-id|netto|brutto|steuer|summe|total|gesamt|gesamtbetrag|nettobetrag|bruttobetrag|endbetrag|zahlbetrag|zwischensumme|übertrag|uebertrag|skonto|rabatt|gutschrift|nachlass|geg\.|rückgeld|rueckgeld|bar|kartenzahlung|kundenbeleg|terminal\-id|beleg|rechnung|lieferschein|datum|rechnungsdatum|belegdatum|lieferdatum|leistungsdatum|bestelldatum|fälligkeit|faelligkeit|zahlungsziel|zahlbar|bankverbindung|iban|bic|bank|konto|blz|amtsgericht|hrb|hra|geschäftsführer|geschaeftsfuehrer|vorstand|handelsregister|kundennummer|kunden\-nr|rechnungsnummer|rechnungs\-nr|lieferscheinnummer|lieferschein\-nr|tour|fahrer|seite|page|telefon|telefax|email|web|internet|sona|vietnamese|sona karli|karl\-liebknecht|art\-nr|artnr|artikel|bezeichnung|pos|menge|einheit|einzelpreis|gesamtpreis|preis|pfand|leergut|tse|kassenbon|bon|pos\.|stk|kg|ltr|liter|bund|karton|kiste|packung)$/i;
+
+  if (blacklistRegex.test(lower)) return false;
+
+  // 2. K.O.-Kriterien: Zeilen mit administrativen Hinweisen
+  if (/(?:zwischensumme|gesamtbetrag|nettobetrag|bruttobetrag|endbetrag|zahlbetrag|mwst-abrechnung|steuerfreie|steuerpflichtig|steuerbetrag|lieferdatum\s+frischfleisch|tour\s+\d|kundenbeleg|terminal-id|american\s+express|mastercard|visa\s+card|zahlungsbedingung|bankverbindung|iban\s*[A-Z]{2}|ust-id\s*DE)/i.test(name)) {
+    return false;
+  }
+
+  // 3. Mindestens ein vollwertiges Wort mit >= 3 Buchstaben
+  const words = clean.match(/[a-zA-ZäöüÄÖÜß]{3,}/g);
+  if (!words || words.length === 0) return false;
+
+  const meaningfulWords = words.filter(w => !/^(?:eur|euro|usd|chf|mwst|ust|stk|ktn|pkg|fl|kg|ltr|g|ml|cl|nr|no|pos|art|von|und|mit|fuer|pro|je|der|die|das|vom|am|zum|zur)$/i.test(w));
+  if (meaningfulWords.length === 0) return false;
+
+  // 4. Nicht rein aus Zahlen und Sonderzeichen
+  if (/^[\d\s\.\,\-\/\%\€\$\:\;\#\*\_\~\|\+\(\)]+$/.test(name)) return false;
 
   return true;
 }
 
 function isValidItemLine(line) {
   if (!line || line.length < 4) return false;
-  if (/^(rechnung|beleg|lieferschein|invoice|kundennummer|kunden-nr|iban|bic|datum|rechnungsempf|lieferadresse|sona|karl-liebknecht|summe|gesamt|total|mwst|netto|brutto|zahlbetrag|zwischensumme|übertrag|skonto|seite|page|ust|steuernummer|bank)/i.test(line)) {
+  const l = line.toLowerCase().trim();
+
+  // Header, Footer, Steuern, Zahlungsarten sofort verwerfen
+  if (/^(?:rechnung|beleg|lieferschein|invoice|gutschrift|storno|kundennummer|kunden\-nr|iban|bic|datum|rechnungsdatum|lieferdatum|leistungsdatum|rechnungsempf|lieferadresse|sona|karl\-liebknecht|summe|gesamt|total|mwst|ust|netto|brutto|zahlbetrag|zwischensumme|übertrag|uebertrag|skonto|rabatt|nachlass|seite|page|steuernummer|steuer\-nr|ust\-id|bank|konto|blz|amtsgericht|geschäftsführer|hrb|hra|tour|fahrer|terminal|kartenzahlung|bar\b|ec\-karte|kundenbeleg|bitte beleg)/i.test(l)) {
     return false;
   }
-  if (/(?:rechnung|lieferschein|invoice)\s+(?:nr|nummer|\d)/i.test(line)) {
+  
+  if (/(?:zwischensumme|gesamtbetrag|nettobetrag|bruttobetrag|zahlungsziel|fälligkeit|amtsgericht|handelsregister|geschäftsführer|bankverbindung|lieferdatum\s+frischfleisch|ust-id\s*de)/i.test(l)) {
     return false;
   }
+
   return true;
 }
 
@@ -8287,17 +8396,6 @@ function parseInvoiceText(text, fileName) {
         }
       }
     }
-  }
-
-  if (items.length === 0) {
-    items.push({
-      name: 'Belegposition ' + lieferant + ' (' + fileName + ')',
-      menge: 1,
-      einheit: 'Pauschale',
-      einzelNetto: 100,
-      gesamtNetto: 100,
-      wg: 'E9: Nährmittel/Gewürz'
-    });
   }
 
   return {
