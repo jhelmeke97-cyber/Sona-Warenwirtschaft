@@ -148,14 +148,7 @@ function setupBruchStartButtonSheet(ss) {
     .setVerticalAlignment('middle');
   startSheet.setRowHeight(2, 45);
 
-  let webAppUrl = '';
-  try {
-    webAppUrl = ScriptApp.getService().getUrl() || '';
-  } catch(e) {}
-
-  if (!webAppUrl) {
-    webAppUrl = 'https://script.google.com/macros/s/AKfycbx4nC6bTH4knJBm6ykRmKgstNz-WN_DxKb54f6b8F2D2o4Ofaz0CULogY-xGMav7zbh/exec';
-  }
+  const webAppUrl = 'https://script.google.com/macros/s/AKfycbypZSkR23wSPs8HhMM2nfOUZ6xCtOr2mn60RW8-sNuePQh8s8R22jrk-WDNuX6xn_8/exec';
 
   // Riesiger Touch-Button im edlen Sona Warm-Braun / Gold Stil
   const buttonRange = startSheet.getRange('B4:H7');
