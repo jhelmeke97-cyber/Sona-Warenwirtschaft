@@ -34,7 +34,8 @@ const CONFIG = {
   NAME_ARTIKEL: 'ARTIKELSTAMM',
   NAME_MASTER_ZUTATEN: 'MASTER_ZUTATEN',
   NAME_WARENGRUPPEN: 'WARENGRUPPEN',
-  NAME_PRUEFUNG: 'PRUEFUNG_EINKAUF'
+  NAME_PRUEFUNG: 'PRUEFUNG_EINKAUF',
+  NAME_SCHWUND_BRUCH: 'SCHWUND_BRUCH'
 };
 
 /**
@@ -705,13 +706,16 @@ function onOpen() {
     .addItem('9. 🧹 Fehlerhafte Artikel & Müll-Zeilen JETZT bereinigen', 'cleanupGarbageArticlesFromDatabase')
     .addItem('10. 🩺 Vollständigen Diagnose-Bericht für KI-Optimierung anzeigen', 'showDiagnosticReportAssistant')
     .addSeparator()
-    .addItem('11. 🔍 Plausibilitäts-Audit (Health-Check) ausführen', 'runManualHealthAudit')
-    .addItem('12. 📁 Google Drive Rechnungsordner Verbindung testen', 'checkDriveFolderConnection')
-    .addItem('13. Automatisierung (Täglich 12:00 + Freitags) aktivieren', 'setupAutomatedTriggers')
-    .addItem('14. Freitags-Wochenbericht per Email testen', 'testSendWeeklyReport')
+    .addItem('11. 🗑️ Schwund- & Bruchliste (SCHWUND_BRUCH) öffnen', 'openSchwundBruchView')
+    .addItem('12. 🔄 Schwund- & Bruchliste mit Master-Preisen synchronisieren', 'syncSchwundBruchPrices')
     .addSeparator()
-    .addItem('15. Nächste freie Artikel-ID generieren', 'promptNextArticleId')
-    .addItem('16. Preisabweichungen prüfen', 'checkPriceAnomalies')
+    .addItem('13. 🔍 Plausibilitäts-Audit (Health-Check) ausführen', 'runManualHealthAudit')
+    .addItem('14. 📁 Google Drive Rechnungsordner Verbindung testen', 'checkDriveFolderConnection')
+    .addItem('15. ⏱️ Automatisierung (Täglich 00:00 + Freitags) aktivieren', 'setupAutomatedTriggers')
+    .addItem('16. ✉️ Freitags-Wochenbericht per Email testen', 'testSendWeeklyReport')
+    .addSeparator()
+    .addItem('17. Nächste freie Artikel-ID generieren', 'promptNextArticleId')
+    .addItem('18. Preisabweichungen prüfen', 'checkPriceAnomalies')
     .addToUi();
 }
 
@@ -737,6 +741,12 @@ function onEdit(e) {
     // Multi-Filter im ARTIKELSTAMM: Zeile 2 (Spalten C, F, I, L)
     if (sheetName === CONFIG.NAME_ARTIKEL && row === 2) {
       applyArticleMasterFilters(sheet.getParent());
+      return;
+    }
+
+    // Schwund- & Bruchliste: Live-Berechnung & Master-Preise
+    if (sheetName === (CONFIG.NAME_SCHWUND_BRUCH || 'SCHWUND_BRUCH')) {
+      handleSchwundBruchEdit(sheet, row, col);
       return;
     }
     
@@ -816,6 +826,7 @@ function initializeEntireSystemAndData() {
     setupWeeklyDashboard(ss);
     setupPrueflisteSheet(ss);
     generatePruefliste(ss);
+    setupSchwundBruchSheet(ss);
     refreshSupplierDropdowns(ss);
     setupAutomatedTriggersSilently();
 
@@ -826,8 +837,9 @@ function initializeEntireSystemAndData() {
       '2. MASTER_ZUTATEN: 2-Ebenen-Fundament mit verbindlichen Kalkulationspreisen & lückenloser Herkunft\n' +
       '3. ARTIKELSTAMM: Multi-Kriterien Filterleiste, Gebindenormierung & Zuordnungs-Status\n' +
       '4. PRUEFUNG_EINKAUF: Strukturierte Prüfliste für offene Artikel- & Preisfälle\n' +
-      '5. RECHNUNGSEINGANG: Atomare Belegverbuchung, Storno- & Dublettenschutz\n' +
-      '6. QUALITÄTS-AUDIT: Plausibilitäts-Health-Check, Echtzeit-Alerts & Freitags-Report',
+      '5. SCHWUND_BRUCH: Verlust- & Bruch-Erfassung mit Live-Preisen aus Master-Zutaten\n' +
+      '6. RECHNUNGSEINGANG: Atomare Belegverbuchung, Storno- & Dublettenschutz\n' +
+      '7. QUALITÄTS-AUDIT: Plausibilitäts-Health-Check, Echtzeit-Alerts & Freitags-Report',
       ui.ButtonSet.OK
     );
   } catch (err) {
@@ -841,11 +853,12 @@ function syncMasterZutatenAndDashboard() {
   syncMasterZutatenFromArticles(ss);
   updateDashboardFigures(ss);
   generatePruefliste(ss);
+  syncSchwundBruchPrices(ss);
   SpreadsheetApp.getUi().alert('Master-Zutaten, Kalkulationspreise & Dashboard erfolgreich synchronisiert.');
 }
 
 function cleanupOldSheets(ss) {
-  const namesToKeep = [CONFIG.NAME_DASHBOARD, CONFIG.NAME_RECHNUNGEN, CONFIG.NAME_ARTIKEL, CONFIG.NAME_MASTER_ZUTATEN, CONFIG.NAME_WARENGRUPPEN, CONFIG.NAME_PRUEFUNG];
+  const namesToKeep = [CONFIG.NAME_DASHBOARD, CONFIG.NAME_RECHNUNGEN, CONFIG.NAME_ARTIKEL, CONFIG.NAME_MASTER_ZUTATEN, CONFIG.NAME_WARENGRUPPEN, CONFIG.NAME_PRUEFUNG, CONFIG.NAME_SCHWUND_BRUCH];
   const allSheets = ss.getSheets();
   allSheets.forEach(s => {
     const name = s.getName();
@@ -7380,6 +7393,194 @@ function getKalkulationspreisForMasterZutat(masterIdOrName, targetDate, ss) {
   }
 
   return null;
+}
+
+/**
+ * ============================================================================
+ * 1.8 SCHWUND- & BRUCH-MANAGEMENT (VERLUST-ERFASSUNG & MONETÄRE BEWERTUNG)
+ * ============================================================================
+ */
+function setupSchwundBruchSheet(ss) {
+  if (!ss) ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sbSheet = ss.getSheetByName(CONFIG.NAME_SCHWUND_BRUCH || 'SCHWUND_BRUCH');
+  if (!sbSheet) sbSheet = ss.insertSheet(CONFIG.NAME_SCHWUND_BRUCH || 'SCHWUND_BRUCH');
+  else sbSheet.clear();
+
+  // 1. Titel-Banner
+  sbSheet.getRange('A1:L1').merge()
+    .setValue('🗑️ SCHWUND- & BRUCHLISTE (TÄGLICHE VERLUST-ERFASSUNG MIT LIVE-PREISEN AUS MASTER_ZUTATEN)')
+    .setFontWeight('bold')
+    .setFontSize(12)
+    .setBackground('#7F1D1D')
+    .setFontColor('#FFFFFF')
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle');
+  sbSheet.setRowHeight(1, 38);
+
+  // 2. Tabellen-Header (Zeile 2)
+  const headers = [
+    'Eintrags-ID', 'Datum', 'Bereich / Station', 'Master-Zutat / Artikel', 
+    'Menge', 'Einheit', 'Kalkulationspreis Netto (€)', 'Gesamtverlust Netto (€)', 
+    'Grund / Schwundkategorie', 'Erfasst von', 'Bemerkung / Maßnahme', 'Jahr_Monat'
+  ];
+
+  sbSheet.getRange(2, 1, 1, headers.length).setValues([headers]);
+  sbSheet.getRange('A2:L2').setFontWeight('bold').setBackground('#991B1B').setFontColor('#FFFFFF').setHorizontalAlignment('center').setWrap(true);
+  sbSheet.setRowHeight(2, 35);
+  sbSheet.setFrozenRows(2);
+
+  // 3. Dropdowns & Validierungen
+  const stationen = ['Sushi-Bar', 'Warme Küche', 'Vorbereitungsküche', 'Bar / Service', 'Lager / Kühlhaus'];
+  const stationRule = SpreadsheetApp.newDataValidation().requireValueInList(stationen, true).setAllowInvalid(true).build();
+  sbSheet.getRange('C3:C2000').setDataValidation(stationRule);
+
+  const gruende = [
+    '1. Zubereitungs- / Schnittverlust',
+    '2. Verdorben / MHD / Qualität',
+    '3. Bruch / Beschädigung',
+    '4. Gäste-Reklamation',
+    '5. Personalessen / Verkostung / Probe',
+    '6. Inventur-Differenz'
+  ];
+  const grundRule = SpreadsheetApp.newDataValidation().requireValueInList(gruende, true).setAllowInvalid(true).build();
+  sbSheet.getRange('I3:I2000').setDataValidation(grundRule);
+
+  // Dropdown für Master-Zutaten
+  refreshSchwundBruchMasterDropdown(ss, sbSheet);
+
+  // 4. Zahlenformate
+  sbSheet.getRange('B3:B2000').setNumberFormat('dd.MM.yyyy');
+  sbSheet.getRange('E3:E2000').setNumberFormat('#,##0.00');
+  sbSheet.getRange('G3:H2000').setNumberFormat('[$€-de-DE] #,##0.00');
+  sbSheet.autoResizeColumns(1, 12);
+}
+
+function refreshSchwundBruchMasterDropdown(ss, sbSheet) {
+  if (!ss) ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!sbSheet) sbSheet = ss.getSheetByName(CONFIG.NAME_SCHWUND_BRUCH || 'SCHWUND_BRUCH');
+  const mzSheet = ss.getSheetByName(CONFIG.NAME_MASTER_ZUTATEN);
+  if (!sbSheet || !mzSheet || mzSheet.getLastRow() < 2) return;
+
+  const mzData = mzSheet.getRange(2, 2, mzSheet.getLastRow() - 1, 1).getValues();
+  const mzList = [];
+  mzData.forEach(r => {
+    const name = String(r[0] || '').trim();
+    if (name && !name.startsWith('Unbekannt')) mzList.push(name);
+  });
+
+  const sortedList = Array.from(new Set(mzList)).sort((a, b) => a.localeCompare(b, 'de'));
+  if (sortedList.length > 0) {
+    const mzRule = SpreadsheetApp.newDataValidation().requireValueInList(sortedList, true).setAllowInvalid(true).build();
+    sbSheet.getRange('D3:D2000').setDataValidation(mzRule);
+  }
+}
+
+function openSchwundBruchView() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sbSheet = ss.getSheetByName(CONFIG.NAME_SCHWUND_BRUCH || 'SCHWUND_BRUCH');
+  if (!sbSheet) {
+    setupSchwundBruchSheet(ss);
+    sbSheet = ss.getSheetByName(CONFIG.NAME_SCHWUND_BRUCH || 'SCHWUND_BRUCH');
+  }
+  if (sbSheet) ss.setActiveSheet(sbSheet);
+}
+
+function syncSchwundBruchPrices(ss) {
+  if (!ss) ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sbSheet = ss.getSheetByName(CONFIG.NAME_SCHWUND_BRUCH || 'SCHWUND_BRUCH');
+  const mzSheet = ss.getSheetByName(CONFIG.NAME_MASTER_ZUTATEN);
+  const ui = SpreadsheetApp.getUi();
+  if (!sbSheet || sbSheet.getLastRow() < 3 || !mzSheet || mzSheet.getLastRow() < 2) {
+    if (ui) ui.alert('Hinweis', 'In der Schwund- & Bruchliste sind noch keine Einträge vorhanden.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const mzData = mzSheet.getRange(2, 1, mzSheet.getLastRow() - 1, 8).getValues();
+  const priceMap = {};
+  mzData.forEach(r => {
+    const id = String(r[0] || '').trim().toLowerCase();
+    const name = String(r[1] || '').trim().toLowerCase();
+    const unit = String(r[5] || 'kg').trim();
+    const price = parseFloat(r[6]) || 0;
+    if (name) priceMap[name] = { price, unit };
+    if (id) priceMap[id] = { price, unit };
+  });
+
+  const sbLastRow = sbSheet.getLastRow();
+  const sbData = sbSheet.getRange(3, 1, sbLastRow - 2, 12).getValues();
+  let updatedCount = 0;
+  let totalLossSum = 0;
+
+  for (let i = 0; i < sbData.length; i++) {
+    const zutat = String(sbData[i][3] || '').trim().toLowerCase();
+    const menge = parseFloat(sbData[i][4]) || 0;
+    const info = priceMap[zutat];
+
+    if (info && info.price > 0) {
+      const calcPrice = info.price;
+      const totalLoss = Math.round(menge * calcPrice * 100) / 100;
+      sbSheet.getRange(3 + i, 6).setValue(info.unit);
+      sbSheet.getRange(3 + i, 7).setValue(calcPrice);
+      sbSheet.getRange(3 + i, 8).setValue(totalLoss);
+      totalLossSum += totalLoss;
+      updatedCount++;
+    }
+  }
+
+  refreshSchwundBruchMasterDropdown(ss, sbSheet);
+
+  if (ui) {
+    ui.alert(
+      'Schwund & Bruch synchronisiert',
+      `Erfolgreich ${updatedCount} Einträge mit den tagesaktuellen Kalkulationspreisen aus MASTER_ZUTATEN aktualisiert.\n\n` +
+      `Gesamter monetärer Schwundwert: ${totalLossSum.toFixed(2)} €`,
+      ui.ButtonSet.OK
+    );
+  }
+}
+
+function handleSchwundBruchEdit(sheet, row, col) {
+  if (row < 3) return;
+  const ss = sheet.getParent();
+  
+  // Wenn Datum geändert wird (Spalte 2) -> ID & Monat setzen
+  if (col === 2) {
+    const dateVal = sheet.getRange(row, 2).getValue();
+    if (dateVal instanceof Date && !isNaN(dateVal.getTime())) {
+      const ym = Utilities.formatDate(dateVal, 'Europe/Berlin', 'yyyy-MM');
+      sheet.getRange(row, 12).setValue(ym);
+      const currId = sheet.getRange(row, 1).getValue();
+      if (!currId) {
+        const id = 'SB-' + ym.replace('-', '') + '-' + String(row - 2).padStart(4, '0');
+        sheet.getRange(row, 1).setValue(id);
+      }
+    }
+  }
+
+  // Wenn Zutat gewählt wird (Spalte 4) -> Preis & Einheit aus MASTER_ZUTATEN ziehen
+  if (col === 4) {
+    const zutat = String(sheet.getRange(row, 4).getValue() || '').trim();
+    if (zutat) {
+      const priceInfo = getCalculationPriceForIngredient(zutat, null, ss);
+      if (priceInfo && priceInfo.price > 0) {
+        sheet.getRange(row, 6).setValue(priceInfo.unit || 'kg');
+        sheet.getRange(row, 7).setValue(priceInfo.price);
+        const menge = parseFloat(sheet.getRange(row, 5).getValue()) || 0;
+        if (menge > 0) {
+          sheet.getRange(row, 8).setValue(Math.round(menge * priceInfo.price * 100) / 100);
+        }
+      }
+    }
+  }
+
+  // Wenn Menge geändert wird (Spalte 5) -> Verlust berechnen
+  if (col === 5 || col === 7) {
+    const menge = parseFloat(sheet.getRange(row, 5).getValue()) || 0;
+    const price = parseFloat(sheet.getRange(row, 7).getValue()) || 0;
+    if (menge > 0 && price > 0) {
+      sheet.getRange(row, 8).setValue(Math.round(menge * price * 100) / 100);
+    }
+  }
 }
 
 /**
