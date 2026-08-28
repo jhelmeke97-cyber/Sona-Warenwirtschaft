@@ -26,7 +26,7 @@ const CONFIG = {
   ARCHIVE_FOLDER_NAME: '_Verarbeitet',
   SHEET_ID: '1JebVj7LmD6gRqR88h0HAji5YM7lmDuiK7YWsVYSNTZA',
   REPORT_DAY: ScriptApp.WeekDay.FRIDAY,
-  SCAN_HOUR: 12,
+  SCAN_HOUR: 0,
   REPORT_HOUR: 12,
   
   NAME_DASHBOARD: 'DASHBOARD',
@@ -7757,7 +7757,7 @@ function setupAutomatedTriggers() {
   SpreadsheetApp.getUi().alert(
     'Automatisierung aktiv (' + CONFIG.LOCATION_NAME + ')',
     'Folgende Zeitpläne sind aktiv:\n\n' +
-    '1. Täglich um 12:00 Uhr: Rechnungs-Scan, OCR & Sofort-Alerts\n' +
+    '1. Täglich um 00:00 Uhr: Rechnungs-Scan, OCR & Sofort-Alerts\n' +
     '2. Jeden Freitag um 12:00 Uhr: Controlling- & Health-Check-Report per Email an ' + getUserEmail() + '\n\n' +
     'Das System läuft autonom im Hintergrund.',
     SpreadsheetApp.getUi().ButtonSet.OK
@@ -7791,7 +7791,7 @@ function setupAutomatedTriggersSilently() {
 }
 
 function dailyInvoiceScan() {
-  Logger.log('Autonomer Rechnungs-Scan (12:00 Uhr) gestartet...');
+  Logger.log('Autonomer Rechnungs-Scan (00:00 Uhr) gestartet...');
   let ss;
   try {
     ss = SpreadsheetApp.openById(CONFIG.SHEET_ID);
@@ -7804,6 +7804,16 @@ function dailyInvoiceScan() {
     return;
   }
   
+  // Lösche eventuelle temporäre Chaining-Trigger aus Vorläufen
+  try {
+    const projectTriggers = ScriptApp.getProjectTriggers();
+    projectTriggers.forEach(t => {
+      if (t.getHandlerFunction() === 'continueDailyBatchScan') {
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+  } catch(te) {}
+
   let folder;
   try {
     folder = DriveApp.getFolderById(CONFIG.DRIVE_FOLDER_ID);
@@ -7821,10 +7831,17 @@ function dailyInvoiceScan() {
   let count = 0;
   const startTime = Date.now();
   const allBatchAlerts = [];
+  let remainingFilesExist = false;
   
   while (files.hasNext()) {
-    if (Date.now() - startTime > 260000) {
-      Logger.log('Zeitlimit erreicht - verbleibende Belege werden im nächsten Durchlauf verarbeitet.');
+    if (Date.now() - startTime > 210000) { // Watchdog nach 3.5 Min
+      remainingFilesExist = true;
+      Logger.log('Watchdog aktiv: Chaining-Trigger wird gesetzt für nahtlose Fortsetzung in 5 Sekunden.');
+      try {
+        ScriptApp.newTrigger('continueDailyBatchScan').timeBased().after(5000).create();
+      } catch(e) {
+        Logger.log('Fehler beim Setzen des Chaining-Triggers: ' + e.toString());
+      }
       break;
     }
     const file = files.next();
@@ -7857,12 +7874,16 @@ function dailyInvoiceScan() {
     syncMasterZutatenFromArticles(ss);
     refreshSupplierDropdowns(ss);
     generatePruefliste(ss);
-    Logger.log(count + ' neue Belege erfolgreich verbucht, Master-Zutaten und Prüfliste aktualisiert.');
+    Logger.log(count + ' Belege in diesem Durchlauf verbucht.');
 
     if (allBatchAlerts.length > 0) {
       sendRealtimeAlertEmail(allBatchAlerts, { lieferant: 'Sammel-Scan', rechnungsNr: 'Auto-Batch' });
     }
   }
+}
+
+function continueDailyBatchScan() {
+  dailyInvoiceScan();
 }
 
 /**
@@ -7899,8 +7920,11 @@ function triggerManualInvoiceScan() {
   let timeoutReached = false;
   
   while (files.hasNext()) {
-    if (Date.now() - startTime > 260000) {
+    if (Date.now() - startTime > 210000) {
       timeoutReached = true;
+      try {
+        ScriptApp.newTrigger('continueDailyBatchScan').timeBased().after(4000).create();
+      } catch(e) {}
       break;
     }
     const file = files.next();
@@ -7943,12 +7967,12 @@ function triggerManualInvoiceScan() {
     msg += `Insgesamt ${totalItemsCount} Positionen in RECHNUNGSEINGANG, ARTIKELSTAMM und MASTER_ZUTATEN eingepflegt.\n\n`;
     msg += `Die Dateien wurden zur Archivierung in den Unterordner "${CONFIG.ARCHIVE_FOLDER_NAME}" verschoben.`;
     if (timeoutReached) {
-      msg += `\n\n⏱️ Zeitlimit erreicht: Ein Teil der Belege wurde verbucht. Bitte starte den Scan erneut, um die restlichen Dateien einzulesen.`;
+      msg += `\n\n🔄 Hinweis: Der Scan wird automatisch im Hintergrund in wenigen Sekunden für alle weiteren Dateien fortgesetzt.`;
     }
     if (errors.length > 0) {
       msg += `\n\nHinweise / Unlesbare Dateien:\n` + errors.join('\n');
     }
-    ui.alert('Manueller Beleg-Scan abgeschlossen', msg, ui.ButtonSet.OK);
+    ui.alert('Manueller Beleg-Scan', msg, ui.ButtonSet.OK);
   } else {
     ui.alert(
       'Keine neuen Rechnungen gefunden',
@@ -7961,7 +7985,7 @@ function triggerManualInvoiceScan() {
 }
 
 /**
- * Liest ALLE Rechnungen (auch die bereits im _Archiv liegenden) mit den neuen Hochpräzisions-Parsern erneut ein
+ * Liest ALLE Rechnungen (auch die bereits im _Archiv / _Verarbeitet liegenden) mit den neuen Hochpräzisions-Parsern erneut ein
  */
 function rescanAllInvoicesIncludingArchive() {
   const ui = SpreadsheetApp.getUi();
@@ -7972,6 +7996,16 @@ function rescanAllInvoicesIncludingArchive() {
     ss = SpreadsheetApp.openById(CONFIG.SHEET_ID);
   }
   
+  // Lösche temporäre Chaining-Trigger
+  try {
+    const projectTriggers = ScriptApp.getProjectTriggers();
+    projectTriggers.forEach(t => {
+      if (t.getHandlerFunction() === 'continueRescanArchiveBatch') {
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+  } catch(te) {}
+
   let folder;
   try {
     folder = DriveApp.getFolderById(CONFIG.DRIVE_FOLDER_ID);
@@ -7992,11 +8026,11 @@ function rescanAllInvoicesIncludingArchive() {
     }
   }
   
-  // 2. Dateien im _Archiv Unterordner sammeln
-  const subFolders = folder.getFoldersByName(CONFIG.ARCHIVE_FOLDER_NAME);
-  if (subFolders.hasNext()) {
-    const archiveFolder = subFolders.next();
-    const archFiles = archiveFolder.getFiles();
+  // 2. Dateien in Unterordnern (_Verarbeitet / _Archiv) sammeln
+  const subFolders = folder.getFolders();
+  while (subFolders.hasNext()) {
+    const subF = subFolders.next();
+    const archFiles = subF.getFiles();
     while (archFiles.hasNext()) {
       const f = archFiles.next();
       const mime = f.getMimeType();
@@ -8007,7 +8041,7 @@ function rescanAllInvoicesIncludingArchive() {
   }
   
   if (allFiles.length === 0) {
-    if (ui) ui.alert('Keine Belege gefunden', 'Weder im Hauptordner noch im Archiv wurden PDF- oder Bild-Dateien gefunden.', ui.ButtonSet.OK);
+    if (ui) ui.alert('Keine Belege gefunden', 'Weder im Hauptordner noch in den Unterordnern wurden PDF- oder Bild-Dateien gefunden.', ui.ButtonSet.OK);
     return;
   }
   
@@ -8020,8 +8054,11 @@ function rescanAllInvoicesIncludingArchive() {
   let timeoutReached = false;
   
   for (let i = 0; i < allFiles.length; i++) {
-    if (Date.now() - startTime > 260000) {
+    if (Date.now() - startTime > 210000) { // 3.5 Min Watchdog
       timeoutReached = true;
+      try {
+        ScriptApp.newTrigger('continueRescanArchiveBatch').timeBased().after(4000).create();
+      } catch(e) {}
       break;
     }
     const file = allFiles[i];
@@ -8053,26 +8090,30 @@ function rescanAllInvoicesIncludingArchive() {
   refreshSupplierDropdowns(ss);
   generatePruefliste(ss);
   
-  let msg = `Neu-Scan abgeschlossen!\n\n` +
+  let msg = `Neu-Scan Durchlauf abgeschlossen!\n\n` +
             `• ${processedCount} Belege erfolgreich verbucht\n` +
             `• ${totalItemsCount} Artikelpositionen in ARTIKELSTAMM eingepflegt\n` +
-            `• RECHNUNGSEINGANG, MASTER_ZUTATEN & DASHBOARD wurden vollständig aktualisiert!\n\n`;
+            `• RECHNUNGSEINGANG, MASTER_ZUTATEN & DASHBOARD wurden aktualisiert!\n\n`;
   
   if (processedLog.length > 0) {
     msg += `VERBUCHTE BELEGE (Auszug):\n` + processedLog.slice(0, 15).join('\n') + (processedLog.length > 15 ? `\n... und ${processedLog.length - 15} weitere` : '') + '\n\n';
   }
   
   if (timeoutReached) {
-    msg += `⏱️ Google Apps Script Zeitlimit erreicht: Führe die Funktion bitte ein zweites Mal aus, um die restlichen Dateien einzulesen.\n\n`;
+    msg += `🔄 Automatischer Hintergrund-Scan aktiv: Der nächste Durchlauf startet in 4 Sekunden vollautomatisch für alle verbleibenden Dateien!`;
   }
   
   if (errors.length > 0) {
-    msg += `Hinweise:\n` + errors.slice(0, 5).join('\n');
+    msg += `\nHinweise:\n` + errors.slice(0, 5).join('\n');
   }
   
   if (ui) {
     ui.alert('Re-Scan aller Belege', msg, ui.ButtonSet.OK);
   }
+}
+
+function continueRescanArchiveBatch() {
+  rescanAllInvoicesIncludingArchive();
 }
 
 /**
@@ -8701,12 +8742,16 @@ function parseInvoiceText(text, fileName) {
   // 3. Rechnungsnummer erkennen
   const rechnungsNr = extractInvoiceNumber(text, rechnungsDatum);
 
-  // 4. Positionen erkennen (Staude vs. Amazon vs. Einzelhandel vs. Großhandel)
+  // 4. Positionen erkennen (Staude vs. Amazon vs. SSP vs. Weinkönner vs. Einzelhandel vs. Großhandel)
   let items = [];
   if (isStaudeInvoice(text, lieferant)) {
     items = parseStaudeInvoiceLines(lines);
   } else if (isAmazonInvoice(text, lieferant)) {
     items = parseAmazonInvoiceLines(lines);
+  } else if (isSSPInvoice(text, lieferant)) {
+    items = parseSSPInvoiceLines(lines);
+  } else if (isWeinkoennerInvoice(text, lieferant)) {
+    items = parseWeinkoennerInvoiceLines(lines);
   } else if (isRetailReceipt(text, lieferant)) {
     items = parseRetailReceiptLines(lines, lieferant);
   }
@@ -8732,7 +8777,7 @@ function parseInvoiceText(text, fileName) {
           let cleanName = cleanArticleName(rawName);
           
           if (isValidArticleName(cleanName)) {
-            const wg = matchWarengruppe(cleanName);
+            const wg = matchWarengruppe(cleanName, lieferant);
             items.push({
               name: cleanName,
               menge: menge,
