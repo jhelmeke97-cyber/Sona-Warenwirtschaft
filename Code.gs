@@ -8510,6 +8510,205 @@ function syncSchwundDataFromRestaurantToSonaHub() {
 }
 
 /**
+ * Synchronisiert wöchentlich aggregierte Bruchdaten aus der Restaurant-Bruchtabelle in das zentrale SONA Hub
+ */
+function syncBruchDataFromRestaurantToSonaHub() {
+  Logger.log('Starte Bruch-Synchronisation zum SONA Hub...');
+  try {
+    const bruchId = CONFIG.BRUCH_SPREADSHEET_ID || '1EudAGrkHhqxA8ii2B07_wALa8USgI8tJhz4potS73KA';
+    const bruchSs = SpreadsheetApp.openById(bruchId);
+    const sourceSheet = bruchSs.getSheetByName('BRUCH_NEU');
+    if (!sourceSheet || sourceSheet.getLastRow() < 4) {
+      Logger.log('Keine Bruchbuchungen in ' + bruchId + ' vorhanden.');
+      return;
+    }
+
+    const rawData = sourceSheet.getRange(4, 1, sourceSheet.getLastRow() - 3, 14).getValues();
+    const kwMap = {};
+    let totalAllLoss = 0;
+    let totalAllPieces = 0;
+
+    rawData.forEach(r => {
+      const art = String(r[5] || '').trim();
+      if (!art) return;
+
+      const ym = String(r[13] || '2026-08');
+      const kw = String(r[2] || 'KW 01');
+      const kwKey = ym.substring(0, 4) + '-' + kw;
+      const employee = String(r[3] || '').trim();
+      const station = String(r[4] || 'Sonstige').trim();
+      const qty = parseInt(r[6], 10) || 0;
+      const loss = parseFloat(r[9]) || 0;
+      const reason = String(r[10] || 'Sonstiges').trim();
+
+      totalAllLoss += loss;
+      totalAllPieces += qty;
+
+      if (!kwMap[kwKey]) {
+        kwMap[kwKey] = {
+          location: CONFIG.LOCATION_NAME,
+          kwKey: kwKey,
+          year: ym.substring(0, 4),
+          kw: kw,
+          totalLoss: 0,
+          totalPieces: 0,
+          glasLoss: 0,
+          geschirrLoss: 0,
+          zubehoerLoss: 0,
+          bookingCount: 0,
+          employees: new Set(),
+          stationLosses: {},
+          reasonLosses: {},
+          articleLosses: {}
+        };
+      }
+
+      const obj = kwMap[kwKey];
+      obj.totalLoss += loss;
+      obj.totalPieces += qty;
+      obj.bookingCount++;
+      if (employee) obj.employees.add(employee);
+
+      const artLow = art.toLowerCase();
+      if (artLow.includes('glas') || artLow.includes('nachtmann') || artLow.includes('flasche') || artLow.includes('karaffe') || artLow.includes('aperitif') || artLow.includes('whisky')) {
+        obj.glasLoss += loss;
+      } else if (artLow.includes('teller') || artLow.includes('tasse') || artLow.includes('schale') || artLow.includes('schüssel') || artLow.includes('besteck') || artLow.includes('löffel')) {
+        obj.geschirrLoss += loss;
+      } else {
+        obj.zubehoerLoss += loss;
+      }
+
+      obj.stationLosses[station] = (obj.stationLosses[station] || 0) + loss;
+      obj.reasonLosses[reason] = (obj.reasonLosses[reason] || 0) + loss;
+      obj.articleLosses[art] = (obj.articleLosses[art] || 0) + loss;
+    });
+
+    const nowStr = Utilities.formatDate(new Date(), 'Europe/Berlin', 'dd.MM.yyyy HH:mm');
+
+    const summaryRows = Object.values(kwMap).map(kwObj => {
+      let topStation = '-', maxStationLoss = -1;
+      for (const [st, val] of Object.entries(kwObj.stationLosses)) {
+        if (val > maxStationLoss) { maxStationLoss = val; topStation = st; }
+      }
+
+      let topReason = '-', maxReasonLoss = -1;
+      for (const [re, val] of Object.entries(kwObj.reasonLosses)) {
+        if (val > maxReasonLoss) { maxReasonLoss = val; topReason = re; }
+      }
+
+      let topArticle = '-', maxArtLoss = -1;
+      for (const [art, val] of Object.entries(kwObj.articleLosses)) {
+        if (val > maxArtLoss) { maxArtLoss = val; topArticle = art + ` (${val.toFixed(2)} €)`; }
+      }
+
+      return [
+        kwObj.location,
+        kwObj.kwKey,
+        kwObj.year,
+        kwObj.kw,
+        Math.round(kwObj.totalLoss * 100) / 100,
+        kwObj.totalPieces,
+        Math.round(kwObj.glasLoss * 100) / 100,
+        Math.round(kwObj.geschirrLoss * 100) / 100,
+        Math.round(kwObj.zubehoerLoss * 100) / 100,
+        topStation,
+        topReason,
+        topArticle,
+        kwObj.bookingCount,
+        Array.from(kwObj.employees).join(', '),
+        nowStr
+      ];
+    });
+
+    summaryRows.sort((a, b) => b[1].localeCompare(a[1], 'de'));
+
+    const hubId = CONFIG.SONA_HUB_SPREADSHEET_ID || '1VZ2Q9tU3QcmVhYZRotYWkV-wgNwQFWsGZ6QLvH4goWE';
+    const hubSs = SpreadsheetApp.openById(hubId);
+    
+    // Weekly Tab
+    let hubWeeklySheet = hubSs.getSheetByName(CONFIG.SONA_HUB_TAB_BRUCH_WEEKLY || 'BRUCH_SONA_KARLI');
+    if (!hubWeeklySheet) {
+      hubWeeklySheet = hubSs.insertSheet(CONFIG.SONA_HUB_TAB_BRUCH_WEEKLY || 'BRUCH_SONA_KARLI');
+    }
+    hubWeeklySheet.clear();
+
+    hubWeeklySheet.getRange('A1:O1').merge()
+      .setValue('🏢 SONA HUB — WÖCHENTLICHES BRUCH-CONTROLLING (STANDORT: ' + CONFIG.LOCATION_NAME.toUpperCase() + ')')
+      .setFontWeight('bold')
+      .setFontSize(13)
+      .setBackground('#1C1A18')
+      .setFontColor('#D4AF37')
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle');
+    hubWeeklySheet.setRowHeight(1, 40);
+
+    const weeklyHeaders = [
+      'Standort', 'Jahr_KW', 'Jahr', 'Kalenderwoche', 'Gesamt-Bruchwert (€)', 
+      'Bruchmenge (Stück)', 'Verlust Gläser (€)', 'Verlust Geschirr/Besteck (€)', 
+      'Verlust Zubehör (€)', 'Haupt-Bruchstation', 'Haupt-Bruchgrund', 
+      'Top-Bruchartikel', 'Anzahl Buchungen', 'Erfasste Mitarbeiter', 'Letzte Synchronisation'
+    ];
+
+    hubWeeklySheet.getRange(3, 1, 1, weeklyHeaders.length).setValues([weeklyHeaders]);
+    hubWeeklySheet.getRange('A3:O3').setFontWeight('bold').setBackground('#2A2621').setFontColor('#F5EBE1').setHorizontalAlignment('center').setWrap(true);
+    hubWeeklySheet.setRowHeight(3, 38);
+    hubWeeklySheet.setFrozenRows(3);
+
+    if (summaryRows.length > 0) {
+      hubWeeklySheet.getRange(4, 1, summaryRows.length, weeklyHeaders.length).setValues(summaryRows);
+      hubWeeklySheet.getRange(4, 5, summaryRows.length, 1).setNumberFormat('[$€-de-DE] #,##0.00');
+      hubWeeklySheet.getRange(4, 6, summaryRows.length, 1).setNumberFormat('#,##0');
+      hubWeeklySheet.getRange(4, 7, summaryRows.length, 3).setNumberFormat('[$€-de-DE] #,##0.00');
+      hubWeeklySheet.getRange(4, 1, summaryRows.length, 4).setHorizontalAlignment('center');
+      hubWeeklySheet.getRange(4, 13, summaryRows.length, 1).setHorizontalAlignment('center');
+      hubWeeklySheet.getRange(4, 15, summaryRows.length, 1).setHorizontalAlignment('center');
+    }
+    hubWeeklySheet.autoResizeColumns(1, weeklyHeaders.length);
+
+    // Rohdaten-Tab
+    let hubRawSheet = hubSs.getSheetByName('BRUCH_ROHDATEN_KARLI');
+    if (!hubRawSheet) {
+      hubRawSheet = hubSs.insertSheet('BRUCH_ROHDATEN_KARLI');
+    }
+    hubRawSheet.clear();
+
+    hubRawSheet.getRange('A1:N1').merge()
+      .setValue('📋 SONA HUB — BRUCH ROHDATEN LIVE-SPIEGEL (STANDORT: ' + CONFIG.LOCATION_NAME.toUpperCase() + ')')
+      .setFontWeight('bold')
+      .setFontSize(13)
+      .setBackground('#1C1A18')
+      .setFontColor('#D4AF37')
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle');
+    hubRawSheet.setRowHeight(1, 40);
+
+    const rawHeaders = [
+      'Eintrags-ID', 'Datum', 'KW', 'Erfasst von (Mitarbeiter)', 'Bereich / Station', 
+      'Bruch-Artikel / Glas / Geschirr', 'Menge (Stück)', 'Einheit', 
+      'Listenpreis Netto (€ / Stk)', 'Gesamt-Bruchwert Netto (€)', 
+      'Bruchgrund / Ursache', 'Status Preis', 'Bemerkung / Maßnahme', 'Jahr_Monat'
+    ];
+
+    hubRawSheet.getRange(3, 1, 1, rawHeaders.length).setValues([rawHeaders]);
+    hubRawSheet.getRange('A3:N3').setFontWeight('bold').setBackground('#2A2621').setFontColor('#F5EBE1').setHorizontalAlignment('center').setWrap(true);
+    hubRawSheet.setRowHeight(3, 38);
+    hubRawSheet.setFrozenRows(3);
+
+    if (rawData.length > 0) {
+      hubRawSheet.getRange(4, 1, rawData.length, rawHeaders.length).setValues(rawData);
+      hubRawSheet.getRange('B4:B' + (rawData.length + 3)).setNumberFormat('dd.MM.yyyy');
+      hubRawSheet.getRange('G4:G' + (rawData.length + 3)).setNumberFormat('#,##0');
+      hubRawSheet.getRange('I4:J' + (rawData.length + 3)).setNumberFormat('[$€-de-DE] #,##0.00');
+    }
+    hubRawSheet.autoResizeColumns(1, rawHeaders.length);
+
+    Logger.log(`SONA Hub Bruch-Sync erfolgreich: ${summaryRows.length} KWs, ${rawData.length} Buchungen, ${totalAllLoss.toFixed(2)} €.`);
+  } catch (err) {
+    Logger.log('Fehler bei Sona Hub Bruch-Sync: ' + err.toString());
+  }
+}
+
+/**
  * ==========================================
  * 3. ECHTZEIT-ALERTS BEI RECHNUNGS-TRIGGER (100% EMOJI-FREI)
  * ==========================================
@@ -9008,11 +9207,17 @@ function dailyInvoiceScan() {
     }
   }
 
-  // Automatische Schwund-Synchronisation zum SONA Hub (wöchentlich / täglich bei Scan)
+  // Automatische Schwund- & Bruch-Synchronisation zum SONA Hub (wöchentlich / täglich bei Scan)
   try {
     syncSchwundDataFromRestaurantToSonaHub();
   } catch (hubErr) {
-    Logger.log('SONA Hub Auto-Sync Hinweis: ' + hubErr.toString());
+    Logger.log('SONA Hub Schwund Auto-Sync Hinweis: ' + hubErr.toString());
+  }
+
+  try {
+    syncBruchDataFromRestaurantToSonaHub();
+  } catch (bruchErr) {
+    Logger.log('SONA Hub Bruch Auto-Sync Hinweis: ' + bruchErr.toString());
   }
 }
 
