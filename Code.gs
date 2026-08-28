@@ -7961,53 +7961,88 @@ function triggerManualInvoiceScan() {
 function cleanupGarbageArticlesFromDatabase() {
   const ss = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById(CONFIG.SHEET_ID);
   const artSheet = ss.getSheetByName(CONFIG.NAME_ARTIKEL);
+  const mzSheet = ss.getSheetByName(CONFIG.NAME_MASTER_ZUTATEN);
   const recSheet = ss.getSheetByName(CONFIG.NAME_RECHNUNGEN);
   const ui = SpreadsheetApp.getUi();
   
   let deletedArtCount = 0;
+  let fixedArtCount = 0;
+  let deletedMzCount = 0;
   let deletedRecCount = 0;
 
-  // 1. ARTIKELSTAMM bereinigen (von unten nach oben)
+  // 1. ARTIKELSTAMM bereinigen & fehlerhafte Warengruppen korrigieren
   if (artSheet && artSheet.getLastRow() >= 5) {
     const lastRow = artSheet.getLastRow();
-    const data = artSheet.getRange(5, 1, lastRow - 4, 2).getValues();
+    const data = artSheet.getRange(5, 1, lastRow - 4, 18).getValues();
+    
     for (let i = data.length - 1; i >= 0; i--) {
       const artName = String(data[i][1] || '').trim();
+      
+      // Müll löschen
       if (!isValidArticleName(artName)) {
         artSheet.deleteRow(5 + i);
         deletedArtCount++;
+        continue;
+      }
+
+      // Warengruppe und Kategorie neu validieren & korrigieren
+      const currentWg = String(data[i][2] || '').trim();
+      const properWg = matchWarengruppe(artName);
+      
+      if (properWg && properWg !== currentWg) {
+        const wgInfo = getWarengruppenInfo(properWg);
+        artSheet.getRange(5 + i, 3).setValue(wgInfo.name);
+        artSheet.getRange(5 + i, 4).setValue(wgInfo.kat);
+        artSheet.getRange(5 + i, 5).setValue(wgInfo.mwst);
+        fixedArtCount++;
       }
     }
   }
 
-  // 2. RECHNUNGSEINGANG bereinigen (von unten nach oben)
+  // 2. MASTER_ZUTATEN bereinigen
+  if (mzSheet && mzSheet.getLastRow() > 1) {
+    const lastRow = mzSheet.getLastRow();
+    const data = mzSheet.getRange(2, 2, lastRow - 1, 1).getValues();
+    for (let i = data.length - 1; i >= 0; i--) {
+      const mzName = String(data[i][0] || '').trim();
+      if (!isValidArticleName(mzName)) {
+        mzSheet.deleteRow(2 + i);
+        deletedMzCount++;
+      }
+    }
+  }
+
+  // 3. RECHNUNGSEINGANG bereinigen
   if (recSheet && recSheet.getLastRow() > 1) {
     const lastRow = recSheet.getLastRow();
-    const data = recSheet.getRange(2, 7, lastRow - 1, 1).getValues(); // Spalte 7: Artikelbezeichnung
+    const data = recSheet.getRange(2, 1, lastRow - 1, Math.min(13, recSheet.getLastColumn())).getValues();
     for (let i = data.length - 1; i >= 0; i--) {
-      const artName = String(data[i][0] || '').trim();
-      if (!isValidArticleName(artName)) {
+      const lieferant = String(data[i][3] || '').trim();
+      const netto = parseFloat(data[i][5]) || 0;
+      if (!lieferant || lieferant.startsWith('Unbekannt') || netto <= 0) {
         recSheet.deleteRow(2 + i);
         deletedRecCount++;
       }
     }
   }
 
-  // 3. MASTER_ZUTATEN neu synchronisieren & Prüfliste aktualisieren
+  // 4. MASTER_ZUTATEN neu synchronisieren & Prüfliste aktualisieren
   syncMasterZutatenFromArticles(ss);
   generatePruefliste(ss);
   updateDashboardFigures(ss);
   refreshSupplierDropdowns(ss);
 
-  const msg = `Datenbank erfolgreich bereinigt:\n\n` +
+  const msg = `Datenbank erfolgreich bereinigt & korrigiert:\n\n` +
               `• ${deletedArtCount} fehlerhafte Müll-Artikel aus dem ARTIKELSTAMM gelöscht\n` +
-              `• ${deletedRecCount} fehlerhafte Zeilen aus dem RECHNUNGSEINGANG gelöscht\n` +
-              `• MASTER_ZUTATEN und PRUEFUNG_EINKAUF wurden vollständig bereinigt und neu synchronisiert.`;
+              `• ${fixedArtCount} falsch kategorisierte Artikel korrigiert (z. B. Leergut / Softdrinks)\n` +
+              `• ${deletedMzCount} ungültige Master-Zutaten entfernt\n` +
+              `• ${deletedRecCount} fehlerhafte Belege aus dem RECHNUNGSEINGANG gelöscht\n` +
+              `• MASTER_ZUTATEN und PRUEFUNG_EINKAUF wurden vollständig neu synchronisiert.`;
   
   if (ui) {
     ui.alert('Bereinigung abgeschlossen', msg, ui.ButtonSet.OK);
   }
-  return { deletedArtCount, deletedRecCount };
+  return { deletedArtCount, fixedArtCount, deletedMzCount, deletedRecCount };
 }
 
 function performGoogleOcr(file) {
@@ -8659,40 +8694,55 @@ function matchWarengruppe(name) {
     }
   }
 
-  // Nonfood / Verpackung / Gastro-Bedarf
-  if (/bambusstäbchen|stäbchen|essstäbchen|dua\b|handschuh|serviette|alufolie|frischhaltefolie|becher|deckel|schale|tragetasche|strohhalm|spieß|tüte|verpackung|papier|spritzbeutel|gefrierbeutel|nonfood/.test(n)) return 'E24: Nonfood';
-  // Tiefkühl / Dim Sum / Convenience
-  if (/hao kao|dim sum|gyoza|wan tan|frühlingsrolle|spring roll|edamame|tiefkühl|tk |frozen/.test(n)) return 'E10: Tiefkühl';
-  // Soßen / Pasten / Pürees
-  if (/knoblauchpüree|ingwerpüree|püree|puree|sauce|soße|paste|mayo|wasabi|shoyu|sojasauce|meerrettich|teriyaki|ponzu|sriracha|sambal|chili paste|curry paste/.test(n)) return 'E11: Soße/Paste';
-  // Süßwaren & Desserts
-  if (/nata de coco|mochi|dessert|süß|kuchen|eis |ice cream|kandis|schokolade/.test(n)) return 'E21: Süßware';
-  // Frische Kräuter & Gemüse
-  if (/la chanh|zitronenblätter|kräuter|koriander|basilikum|gemüse|salat|obst|beere|limette|zitrone|ingwer|knoblauch|avocado/.test(n)) return 'E8: Gemüse/Salat/Obst';
-  // Geflügel
-  if (/\b(?:pute|puten|putenbrust|hähnchen|huhn|chicken|ente|gans)\b/i.test(n)) return 'E5: Geflügel';
-  // Rind
-  if (/\b(?:rind|rinder|entrecote|ribeye|roastbeef|filet|beef)\b/i.test(n)) return 'E4: Rind';
-  // Schwein
-  if (/\b(?:schwein|schweine|pork|bauch|kassler)\b/i.test(n)) return 'E3: Schwein';
-  // Backwaren & Nährmittel
-  if (/\b(?:brötchen|baguette|brot|mehl|salz|zucker|gewürz|pfeffer|curry|sesam|nori|seetang|reisessig|dashi)\b/i.test(n)) return 'E9: Nährmittel/Gewürz';
-  // Spirituosen
-  if (/\b(?:gin|vodka|wodka|rum|whisky|whiskey|tequila|likör|aperol|lillet|bitter)\b/i.test(n)) return 'E13: Spirituose';
-  // Wein & Schaumwein
-  if (/\b(?:wein|riesling|burgunder|prosecco|frizzante|champagner|sekt)\b/i.test(n)) return 'E14: Wein';
-  // Bier
-  if (/\b(?:bier|pils|weissbier|radler|kirin|asahi|sapporo|tiger)\b/i.test(n)) return 'E15: Bier';
-  // Sake
-  if (/\b(?:sake|junmai|daiginjo|taruzake)\b/i.test(n)) return 'E16: Sake';
-  // Softdrinks
-  if (/\b(?:cola|sprite|fanta|saft|tonic|ginger\s*ale|wasser|limonade)\b/i.test(n)) return 'E18: Softdrinks/Saft';
-  // Öle & Essige
-  if (/\b(?:öl|oil|essig|vinegar)\b/i.test(n)) return 'E22: Öl/Essig';
-  // Reinigung & Hygiene
-  if (/\b(?:spülmittel|reiniger|fettlöser|seife|hygiene|tork|zewa|wischtuch|mülltüte)\b/i.test(n)) return 'E23: Drogerie/Hygienemittel';
+  // 1. Leergut / Pfand
+  if (/\b(?:leergut|pfand|fasspfand|kastenpfand|kistenpfand|pfandfaß|pfandfass|mw leergut|flaschenpfand|containerpfand|pfandwert)\b/i.test(n)) {
+    return 'LG: Leergut / Pfand';
+  }
 
-  return 'E8: Gemüse/Salat/Obst';
+  // 2. Fisch & Seafood (vor Bier wegen Tiger Garnelen!)
+  if (/\b(?:garnelen|shrimps|prawns|black\s*tiger|ebi|oktopus|octopus|squid|calamari|tintenfisch|surimi|tobiko|masago|rogen|unagi|aal|muscheln|jakobsmuscheln)\b/i.test(n)) return 'E2: Seafood';
+  if (/\b(?:lachs|lachsfilet|salmon|dorade|doraden|thunfisch|tuna|kingfish|makrele|zander|kabeljau|hamachi|heilbutt|butterfisch|forelle|seeteufel|saibling|matjes)\b/i.test(n)) return 'E1: Fisch';
+
+  // 3. Fleisch
+  if (/\b(?:pute|puten|putenbrust|hähnchen|huhn|chicken|ente|enten|duck|gans)\b/i.test(n)) return 'E3: Geflügel';
+  if (/\b(?:rind|rinder|entrecote|ribeye|roastbeef|filet|beef|ochsen)\b/i.test(n)) return 'E4: Rind';
+  if (/\b(?:schwein|schweine|pork|bauch|kassler|speck|bacon)\b/i.test(n)) return 'E5: Schwein';
+
+  // 4. Sirup & Bar
+  if (/\b(?:monin|giffard|barsirup|sirup|cordial|riemerschmidt)\b/i.test(n)) return 'E25: Sirup';
+
+  // 5. Spirituosen & Sake & Wein & Bier & Softdrinks
+  if (/\b(?:sake|junmai|daiginjo|taruzake|nihonshu)\b/i.test(n)) return 'E16: Sake';
+  if (/\b(?:bier|pils|helles|oberbräu|weissbier|radler|kirin|asahi|sapporo|tiger\s*beer|tiger\s*bier|fassbier)\b/i.test(n)) return 'E15: Bier';
+  if (/\b(?:wein|riesling|burgunder|merlot|rosato|grauburgunder|weissburgunder|rotwein|weißwein|prosecco|frizzante|champagner|sekt|chardonnay|sauvignon|primitivo)\b/i.test(n)) return 'E14: Wein';
+  if (/\b(?:gin|vodka|wodka|rum|whisky|whiskey|tequila|likör|aperol|lillet|bitter|campari)\b/i.test(n)) return 'E13: Spirituose';
+  if (/\b(?:coca\s*cola|cola|zero|light|sprite|fanta|spezi|mezzomix|red\s*bull|saft|schorle|tonic|ginger\s*ale|mineralwasser|wasser|limonade|vöslauer|gerolsteiner|san\s*pellegrino)\b/i.test(n)) return 'E18: Softdrinks/Saft';
+  if (/\b(?:tee|jasmintee|gruentee|grüntee|matcha|sencha|genmaicha|oolong|kamillentee|pfefferminztee)\b/i.test(n)) return 'E19: Tee';
+  if (/\b(?:kaffee|espresso|kaffeebohnen|cappuccino)\b/i.test(n)) return 'E20: Kaffee';
+
+  // 6. Tofu, Reis & Nudeln
+  if (/\b(?:tofu|saitan|seitan|tempeh|sojabohnenquark)\b/i.test(n)) return 'E6: Tofu & Saitan';
+  if (/\b(?:reis|sushireis|jasminreis|basmati|nudeln|noodles|ramen|udon|soba|glasnudeln|reisnudeln|pho)\b/i.test(n)) return 'E7: Reis/Nudeln';
+
+  // 7. Frische Kräuter & Gemüse & Obst
+  if (/\b(?:gurke|gurken|salatgurke|salatgurken|tomate|tomaten|cherrytomaten|avocado|avocados|lauch|lauchzwiebeln|frühlingszwiebeln|zwiebel|zwiebeln|knoblauch|ingwer|limette|limetten|zitrone|zitronen|paprika|aubergine|auberginen|zucchini|koriander|minze|basilikum|kresse|daikon|rettich|möhre|karotte|salat|eisberg|rucola|spinat|sprossen|pilze|champignons|shiitake|mango|ananas|erdbeeren|litschi|lychee|banane|orange)\b/i.test(n)) return 'E8: Gemüse/Salat/Obst';
+
+  // 8. Tiefkühl & Convenience
+  if (/\b(?:hao kao|dim sum|gyoza|wan tan|frühlingsrolle|spring roll|edamame|tiefkühl|tk\b|frozen)\b/i.test(n)) return 'E10: Tiefkühl';
+
+  // 9. Soßen & Pasten
+  if (/\b(?:knoblauchpüree|ingwerpüree|püree|puree|sauce|soße|paste|mayo|mayonnaise|wasabi|shoyu|sojasauce|meerrettich|teriyaki|ponzu|sriracha|sambal|chili paste|curry paste|hoisin|unagi sauce|austernsauce|fischsauce|sesampaste|tahini|miso)\b/i.test(n)) return 'E11: Soße/Paste';
+
+  // 10. Öle & Essige
+  if (/\b(?:öl|oil|pflanzenöl|sonnenblumenöl|sesamöl|olivenöl|frittieröl|essig|vinegar|reisessig|branntweinessig|suehiro)\b/i.test(n)) return 'E22: Öl/Essig';
+
+  // 11. Milchprodukte
+  if (/\b(?:milch|sahne|butter|käse|cheese|frischkäse|joghurt|kokosmilch|kondensmilch)\b/i.test(n)) return 'E12: Milchprodukte';
+
+  // 12. Nonfood & Hygiene
+  if (/\b(?:handschuh|handschuhe|serviette|servietten|alufolie|frischhaltefolie|becher|deckel|schale|tragetasche|strohhalm|spieß|stäbchen|essstäbchen|bambusstäbchen|tüte|verpackung|papier|spritzbeutel|gefrierbeutel|rollen|spülmittel|reiniger|fettlöser|seife|hygiene|tork|zewa|wischtuch|mülltüte|müllbeutel|nonfood)\b/i.test(n)) return 'E24: Nonfood';
+
+  return 'E9: Nährmittel/Gewürz';
 }
 
 function determineUnit(name, line) {
