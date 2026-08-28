@@ -565,6 +565,23 @@ function getTabletHtmlContent() {
         .status-msg { margin-top: 14px; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.95rem; text-align: center; display: none; }
         .status-msg.success { background: #182C1F; color: #6EE7B7; display: block; border: 1.5px solid #285437; }
         .status-msg.error { background: #301B1B; color: #FCA5A5; display: block; border: 1.5px solid #662B2B; }
+
+        /* Sona Success Modal Popup */
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 9999; padding: 16px; animation: modalFadeIn 0.2s ease-out; }
+        .modal-card { width: 100%; max-width: 440px; background: #1C1A18; border: 2px solid #C5A059; border-radius: 18px; padding: 24px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.85); animation: modalSlideUp 0.25s ease-out; }
+        .modal-icon { font-size: 3rem; margin-bottom: 6px; }
+        .modal-title { margin: 0 0 16px 0; color: #D4AF37; font-size: 1.35rem; font-weight: 800; letter-spacing: 0.8px; }
+        .modal-details { background: #25221D; border: 1px solid #453D34; border-radius: 12px; padding: 14px; margin-bottom: 20px; text-align: left; }
+        .detail-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid #352F28; font-size: 0.92rem; }
+        .detail-row:last-child { border-bottom: none; }
+        .detail-row .lbl { color: #A89B8C; font-weight: 600; }
+        .detail-row .val { color: #F5EBE1; font-weight: 700; }
+        .detail-row .pop-price { color: #E5C378; font-size: 1.2rem; font-weight: 900; }
+        .detail-row .pop-id { color: #D9CDBF; font-family: monospace; font-size: 0.85rem; }
+        .btn-new-entry { width: 100%; padding: 16px; background: linear-gradient(135deg, #C5A059 0%, #8C6239 100%); color: #FFFFFF; border: none; border-radius: 12px; font-size: 1.1rem; font-weight: 800; cursor: pointer; box-shadow: 0 4px 16px rgba(197,160,89,0.4); transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .btn-new-entry:hover { background: linear-gradient(135deg, #D4AF37 0%, #9B783E 100%); transform: translateY(-1px); }
+        @keyframes modalFadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes modalSlideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
       </style>
     </head>
     <body>
@@ -660,6 +677,24 @@ function getTabletHtmlContent() {
           </button>
           <div id="statusMsg" class="status-msg"></div>
         </form>
+      </div>
+
+      <!-- Sona Success Modal -->
+      <div id="successModal" class="modal-overlay">
+        <div class="modal-card">
+          <div class="modal-icon">✨</div>
+          <h3 class="modal-title">ERFOLGREICH GEBUCHT</h3>
+          <div class="modal-details">
+            <div class="detail-row"><span class="lbl">Artikel / Zutat:</span> <span class="val" id="popIngredient">-</span></div>
+            <div class="detail-row"><span class="lbl">Verlustmenge:</span> <span class="val" id="popQty">-</span></div>
+            <div class="detail-row"><span class="lbl">Verlustbetrag:</span> <span class="val pop-price" id="popLoss">0,00 €</span></div>
+            <div class="detail-row"><span class="lbl">Eintrags-ID:</span> <span class="val pop-id" id="popId">-</span></div>
+            <div class="detail-row"><span class="lbl">Station:</span> <span class="val" id="popStation">-</span></div>
+          </div>
+          <button type="button" class="btn-new-entry" onclick="closeSuccessModalAndReset()">
+            <span>➕ NEUEN SCHWUND EINTRAGEN</span>
+          </button>
+        </div>
       </div>
 
       <script>
@@ -865,17 +900,15 @@ function getTabletHtmlContent() {
               btn.disabled = false;
               btn.innerHTML = '<span>⚡ SCHWUND JETZT BUCHEN</span>';
               if (res.success) {
-                msg.className = 'status-msg success';
-                msg.innerText = '✅ Gebucht: ' + res.ingredient + ' (' + res.totalLoss.toFixed(2) + ' €) unter ID ' + res.entryId;
-                document.getElementById('employeeInput').value = '';
-                document.getElementById('ingredientInput').value = '';
-                document.getElementById('quantityInput').value = '';
-                document.getElementById('noteInput').value = '';
-                document.getElementById('reasonSelect').value = '';
-                document.getElementById('newProductBox').style.display = 'none';
-                document.getElementById('previewAmount').innerText = '0,00 €';
-                document.getElementById('previewDetails').innerText = 'Erfolgreich verbucht. Bereit für nächsten Eintrag.';
-                validateFields();
+                // Modal mit Buchungsdetails befüllen
+                document.getElementById('popIngredient').innerText = res.ingredient;
+                document.getElementById('popQty').innerText = res.baseQty.toFixed(3) + ' ' + res.baseUnit;
+                document.getElementById('popLoss').innerText = res.totalLoss.toFixed(2) + ' €';
+                document.getElementById('popId').innerText = res.entryId;
+                document.getElementById('popStation').innerText = payload.station;
+
+                // Erfolgs-Modal anzeigen
+                document.getElementById('successModal').style.display = 'flex';
               } else {
                 msg.className = 'status-msg error';
                 msg.innerText = '❌ ' + res.error;
@@ -888,6 +921,20 @@ function getTabletHtmlContent() {
               msg.innerText = '❌ Verbindungsfehler: ' + err.toString();
             })
             .saveTabletLossEntry(payload);
+        }
+
+        function closeSuccessModalAndReset() {
+          document.getElementById('successModal').style.display = 'none';
+          document.getElementById('employeeInput').value = '';
+          document.getElementById('ingredientInput').value = '';
+          document.getElementById('quantityInput').value = '';
+          document.getElementById('noteInput').value = '';
+          document.getElementById('reasonSelect').value = '';
+          document.getElementById('newProductBox').style.display = 'none';
+          document.getElementById('previewAmount').innerText = '0,00 €';
+          document.getElementById('previewDetails').innerText = 'Bitte alle Pflichtfelder ausfüllen';
+          validateFields();
+          document.getElementById('employeeInput').focus();
         }
       </script>
     </body>
