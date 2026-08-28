@@ -11,7 +11,10 @@ const SCHWUND_CONFIG = {
   NAME_SCHWUND_SHEET: 'SCHWUND_NEU',
   NAME_START_SHEET: 'SCHWUND_ERFASSEN',
   MASTER_WARENWIRTSCHAFT_SHEET_ID: '1JebVj7LmD6gRqR88h0HAji5YM7lmDuiK7YWsVYSNTZA',
-  MASTER_ZUTATEN_TAB: 'MASTER_ZUTATEN'
+  MASTER_ZUTATEN_TAB: 'MASTER_ZUTATEN',
+  SONA_HUB_SPREADSHEET_ID: '1VZ2Q9tU3QcmVhYZRotYWkV-wgNwQFWsGZ6QLvH4goWE',
+  SONA_HUB_TAB_WEEKLY: 'SCHWUND_SONA_KARLI',
+  SONA_HUB_TAB_RAW: 'SCHWUND_ROHDATEN_KARLI'
 };
 
 const LOSS_STATIONS = [
@@ -100,6 +103,9 @@ function onOpen() {
     .addSeparator()
     .addItem('4. 🔄 Preise mit Master-Zutaten synchronisieren', 'syncSchwundNeuPrices')
     .addItem('5. 📊 Wöchentlichen Schwund-Bericht anzeigen', 'showWeeklyLossReport')
+    .addSeparator()
+    .addItem('6. 🚀 Daten jetzt an SONA Hub übertragen', 'syncSchwundDataToSonaHub')
+    .addItem('7. ⏰ Automatischen wöchentlichen Sync einrichten', 'setupAutomaticSonaHubSync')
     .addToUi();
 }
 
@@ -995,4 +1001,249 @@ function showWeeklyLossReport() {
   }
 
   if (ui) ui.alert('Schwund-Controlling Report', msg, ui.ButtonSet.OK);
+}
+
+/**
+ * ============================================================================
+ * SONA HUB SYNCHRONISATIONS-ENGINE (WÖCHENTLICHE AGGREGATION & LIVE-SPIEGELUNG)
+ * ============================================================================
+ */
+function syncSchwundDataToSonaHub() {
+  let ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch(e) {}
+
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sourceSheet = ss.getSheetByName(SCHWUND_CONFIG.NAME_SCHWUND_SHEET);
+    if (!sourceSheet || sourceSheet.getLastRow() < 4) {
+      if (ui) ui.alert('Keine Daten', 'In ' + SCHWUND_CONFIG.NAME_SCHWUND_SHEET + ' liegen noch keine Schwundbuchungen vor.', ui.ButtonSet.OK);
+      return;
+    }
+
+    // 1. Daten aus SCHWUND_NEU lesen
+    const rawData = sourceSheet.getRange(4, 1, sourceSheet.getLastRow() - 3, 16).getValues();
+    const kwMap = {};
+    let totalAllLoss = 0;
+
+    rawData.forEach(r => {
+      const zutat = String(r[5] || '').trim();
+      if (!zutat) return;
+
+      const ym = String(r[15] || '2026-08');
+      const kw = String(r[2] || 'KW 01');
+      const kwKey = ym.substring(0, 4) + '-' + kw;
+      const employee = String(r[3] || '').trim();
+      const station = String(r[4] || 'Sonstige').trim();
+      const loss = parseFloat(r[11]) || 0;
+      const reason = String(r[12] || 'Sonstiges').trim();
+
+      totalAllLoss += loss;
+
+      if (!kwMap[kwKey]) {
+        kwMap[kwKey] = {
+          location: SCHWUND_CONFIG.LOCATION_NAME,
+          kwKey: kwKey,
+          year: ym.substring(0, 4),
+          kw: kw,
+          totalLoss: 0,
+          foodLoss: 0,
+          beverageLoss: 0,
+          bookingCount: 0,
+          employees: new Set(),
+          stationLosses: {},
+          reasonLosses: {},
+          ingredientLosses: {}
+        };
+      }
+
+      const obj = kwMap[kwKey];
+      obj.totalLoss += loss;
+      obj.bookingCount++;
+      if (employee) obj.employees.add(employee);
+
+      if (station.includes('Sushi') || station.includes('Küche') || station.includes('Vorbereitung') || station.includes('Kühlhaus')) {
+        obj.foodLoss += loss;
+      } else if (station.includes('Bar') || station.includes('Service') || station.includes('Getränk')) {
+        obj.beverageLoss += loss;
+      } else {
+        obj.foodLoss += loss;
+      }
+
+      obj.stationLosses[station] = (obj.stationLosses[station] || 0) + loss;
+      obj.reasonLosses[reason] = (obj.reasonLosses[reason] || 0) + loss;
+      obj.ingredientLosses[zutat] = (obj.ingredientLosses[zutat] || 0) + loss;
+    });
+
+    const nowStr = Utilities.formatDate(new Date(), 'Europe/Berlin', 'dd.MM.yyyy HH:mm');
+
+    // 2. Aggregations-Zeilen für Sona Hub generieren
+    const summaryRows = Object.values(kwMap).map(kwObj => {
+      let topStation = '-', maxStationLoss = -1;
+      for (const [st, val] of Object.entries(kwObj.stationLosses)) {
+        if (val > maxStationLoss) { maxStationLoss = val; topStation = st; }
+      }
+
+      let topReason = '-', maxReasonLoss = -1;
+      for (const [re, val] of Object.entries(kwObj.reasonLosses)) {
+        if (val > maxReasonLoss) { maxReasonLoss = val; topReason = re; }
+      }
+
+      let topIngredient = '-', maxIngLoss = -1;
+      for (const [ing, val] of Object.entries(kwObj.ingredientLosses)) {
+        if (val > maxIngLoss) { maxIngLoss = val; topIngredient = ing + ` (${val.toFixed(2)} €)`; }
+      }
+
+      return [
+        kwObj.location,
+        kwObj.kwKey,
+        kwObj.year,
+        kwObj.kw,
+        Math.round(kwObj.totalLoss * 100) / 100,
+        Math.round(kwObj.foodLoss * 100) / 100,
+        Math.round(kwObj.beverageLoss * 100) / 100,
+        topStation,
+        topReason,
+        topIngredient,
+        kwObj.bookingCount,
+        Array.from(kwObj.employees).join(', '),
+        nowStr
+      ];
+    });
+
+    // Nach Jahr/KW absteigend sortieren
+    summaryRows.sort((a, b) => b[1].localeCompare(a[1], 'de'));
+
+    // 3. Sona Hub öffnen
+    const hubSs = SpreadsheetApp.openById(SCHWUND_CONFIG.SONA_HUB_SPREADSHEET_ID);
+    
+    // 3.1 Weekly Tab einrichten/schreiben
+    let hubWeeklySheet = hubSs.getSheetByName(SCHWUND_CONFIG.SONA_HUB_TAB_WEEKLY);
+    if (!hubWeeklySheet) {
+      hubWeeklySheet = hubSs.insertSheet(SCHWUND_CONFIG.SONA_HUB_TAB_WEEKLY);
+    }
+    hubWeeklySheet.clear();
+
+    // Banner
+    hubWeeklySheet.getRange('A1:M1').merge()
+      .setValue('🏢 SONA HUB — WÖCHENTLICHES SCHWUND-CONTROLLING (STANDORT: ' + SCHWUND_CONFIG.LOCATION_NAME.toUpperCase() + ')')
+      .setFontWeight('bold')
+      .setFontSize(13)
+      .setBackground('#1C1A18')
+      .setFontColor('#D4AF37')
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle');
+    hubWeeklySheet.setRowHeight(1, 40);
+
+    const weeklyHeaders = [
+      'Standort', 'Jahr_KW', 'Jahr', 'Kalenderwoche', 'Gesamtverlust Netto (€)', 
+      'Verlust Küche/Food (€)', 'Verlust Bar/Getränke (€)', 'Haupt-Verluststation', 
+      'Haupt-Verlustgrund', 'Top-Verlustartikel', 'Anzahl Buchungen', 
+      'Erfasste Mitarbeiter', 'Letzte Synchronisation'
+    ];
+
+    hubWeeklySheet.getRange(3, 1, 1, weeklyHeaders.length).setValues([weeklyHeaders]);
+    hubWeeklySheet.getRange('A3:M3').setFontWeight('bold').setBackground('#2A2621').setFontColor('#F5EBE1').setHorizontalAlignment('center').setWrap(true);
+    hubWeeklySheet.setRowHeight(3, 38);
+    hubWeeklySheet.setFrozenRows(3);
+
+    if (summaryRows.length > 0) {
+      hubWeeklySheet.getRange(4, 1, summaryRows.length, weeklyHeaders.length).setValues(summaryRows);
+      hubWeeklySheet.getRange(4, 5, summaryRows.length, 3).setNumberFormat('[$€-de-DE] #,##0.00');
+      hubWeeklySheet.getRange(4, 1, summaryRows.length, 4).setHorizontalAlignment('center');
+      hubWeeklySheet.getRange(4, 11, summaryRows.length, 1).setHorizontalAlignment('center');
+      hubWeeklySheet.getRange(4, 13, summaryRows.length, 1).setHorizontalAlignment('center');
+    }
+
+    hubWeeklySheet.autoResizeColumns(1, weeklyHeaders.length);
+
+    // 3.2 Rohdaten-Tab im Sona Hub aktualisieren (für Detail-Analysen)
+    let hubRawSheet = hubSs.getSheetByName(SCHWUND_CONFIG.SONA_HUB_TAB_RAW);
+    if (!hubRawSheet) {
+      hubRawSheet = hubSs.insertSheet(SCHWUND_CONFIG.SONA_HUB_TAB_RAW);
+    }
+    hubRawSheet.clear();
+
+    hubRawSheet.getRange('A1:P1').merge()
+      .setValue('📋 SONA HUB — SCHWUND ROHDATEN LIVE-SPIEGEL (STANDORT: ' + SCHWUND_CONFIG.LOCATION_NAME.toUpperCase() + ')')
+      .setFontWeight('bold')
+      .setFontSize(13)
+      .setBackground('#1C1A18')
+      .setFontColor('#D4AF37')
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle');
+    hubRawSheet.setRowHeight(1, 40);
+
+    const rawHeaders = [
+      'Eintrags-ID', 'Datum', 'KW', 'Erfasst von (Mitarbeiter)', 'Bereich / Station', 
+      'Master-Zutat / Artikel', 'Eingegebene Menge', 'Eingegebene Einheit', 
+      'Menge (Basiseinheit)', 'Basiseinheit', 'Einkaufspreis Netto (€ / Einheit)', 
+      'Gesamtverlust Netto (€)', 'Verlustgrund / Schwundkategorie', 'Status Preis', 
+      'Bemerkung / Maßnahme', 'Jahr_Monat'
+    ];
+
+    hubRawSheet.getRange(3, 1, 1, rawHeaders.length).setValues([rawHeaders]);
+    hubRawSheet.getRange('A3:P3').setFontWeight('bold').setBackground('#2A2621').setFontColor('#F5EBE1').setHorizontalAlignment('center').setWrap(true);
+    hubRawSheet.setRowHeight(3, 38);
+    hubRawSheet.setFrozenRows(3);
+
+    if (rawData.length > 0) {
+      hubRawSheet.getRange(4, 1, rawData.length, rawHeaders.length).setValues(rawData);
+      hubRawSheet.getRange('B4:B' + (rawData.length + 3)).setNumberFormat('dd.MM.yyyy');
+      hubRawSheet.getRange('G4:G' + (rawData.length + 3)).setNumberFormat('#,##0.00');
+      hubRawSheet.getRange('I4:I' + (rawData.length + 3)).setNumberFormat('#,##0.000');
+      hubRawSheet.getRange('K4:L' + (rawData.length + 3)).setNumberFormat('[$€-de-DE] #,##0.00');
+    }
+    hubRawSheet.autoResizeColumns(1, rawHeaders.length);
+
+    const successInfo = 
+      `Erfolgreich synchronisiert mit SONA Hub!\n\n` +
+      `🏢 Hub-ID: ${SCHWUND_CONFIG.SONA_HUB_SPREADSHEET_ID}\n` +
+      `📊 Synchronisierte Kalenderwochen: ${summaryRows.length}\n` +
+      `📋 Übertragene Buchungszeilen: ${rawData.length}\n` +
+      `💰 Gesamter Schwundwert: ${totalAllLoss.toFixed(2)} €\n\n` +
+      `Reiter im Hub aktualisiert:\n` +
+      `• ${SCHWUND_CONFIG.SONA_HUB_TAB_WEEKLY} (Wochen-Zusammenfassung)\n` +
+      `• ${SCHWUND_CONFIG.SONA_HUB_TAB_RAW} (Live-Rohdaten)`;
+
+    Logger.log(successInfo);
+    if (ui) ui.alert('🚀 SONA Hub Synchronisation', successInfo, ui.ButtonSet.OK);
+
+  } catch(err) {
+    Logger.log('Fehler bei Hub-Synchronisation: ' + err.toString());
+    if (ui) ui.alert('Fehler bei Hub-Synchronisation', err.toString(), ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Richtet einen wöchentlichen Automatik-Trigger ein (jeden Montag um 02:00 Uhr)
+ */
+function setupAutomaticSonaHubSync() {
+  let ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch(e) {}
+
+  try {
+    const functionName = 'syncSchwundDataToSonaHub';
+    const triggers = ScriptApp.getProjectTriggers();
+    triggers.forEach(t => {
+      if (t.getHandlerFunction() === functionName) {
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+
+    ScriptApp.newTrigger(functionName)
+      .timeBased()
+      .everyWeeks(1)
+      .onWeekDay(ScriptApp.WeekDay.MONDAY)
+      .atHour(2)
+      .create();
+
+    const msg = 
+      `Der automatische Wöchentliche Hub-Sync wurde erfolgreich eingerichtet!\n\n` +
+      `⏰ Rhythmus: Jeden Montag um 02:00 Uhr\n` +
+      `🎯 Ziel: SONA Hub (${SCHWUND_CONFIG.SONA_HUB_SPREADSHEET_ID})`;
+
+    if (ui) ui.alert('⏰ Automatik-Trigger aktiv', msg, ui.ButtonSet.OK);
+  } catch(e) {
+    if (ui) ui.alert('Fehler bei Trigger-Erstellung', e.toString(), ui.ButtonSet.OK);
+  }
 }
