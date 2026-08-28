@@ -111,12 +111,6 @@ function onEdit(e) {
     const row = range.getRow();
     const col = range.getColumn();
     
-    // Klick auf den großen Start-Button im Tab SCHWUND_ERFASSEN
-    if (sheetName === SCHWUND_CONFIG.NAME_START_SHEET && row >= 3 && row <= 7 && col >= 2 && col <= 6) {
-      showTabletLossEntryDialog();
-      return;
-    }
-
     if (row < 4) return;
     if (sheetName === SCHWUND_CONFIG.NAME_SCHWUND_SHEET || sheetName === 'SCHWUND_NEU') {
       handleSchwundNeuEdit(sheet, row, col);
@@ -145,23 +139,30 @@ function setupStartButtonSheet() {
     .setVerticalAlignment('middle');
   startSheet.setRowHeight(2, 45);
 
-  // Riesiger Touch-Button
+  const webAppUrl = 'https://script.google.com/macros/s/AKfycbwiFHFmRHoiZtjeskEi6dnyPZT_Ubk2cDM7ueazYys/exec';
+
+  // Riesiger Touch-Button mit Hyperlink (funktioniert auf Smartphone, Tablet und PC!)
   const buttonRange = startSheet.getRange('B4:H7');
   buttonRange.merge()
-    .setValue('📱 HIER TIPPEN:\nSCHWUND JETZT BUCHEN')
+    .setFormula(`=HYPERLINK("${webAppUrl}"; "📱 HIER TIPPEN: SCHWUNDERFASSUNG ÖFFNEN")`)
     .setFontWeight('bold')
-    .setFontSize(18)
+    .setFontSize(16)
     .setBackground('#991B1B')
     .setFontColor('#FFFFFF')
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle');
   
-  startSheet.getRange('B9:H10').merge()
-    .setValue('💡 Hinweis für Mitarbeiter:\nTippe auf das rote Feld oben oder nutze das Menü "🗑️ Schwunderfassung" -> "1. Tablet-Schnelleingabe öffnen".')
+  startSheet.getRange('B9:H11').merge()
+    .setValue(
+      '💡 Anleitung für Mitarbeiter:\n' +
+      '• 📱 Auf Smartphone / Tablet: Tippe auf das rote Feld oben, um die Maske im Vollbild zu öffnen.\n' +
+      '• 💻 Am PC / Browser: Klicke im Menü oben auf "🗑️ Schwunderfassung" -> "1. Tablet-Schnelleingabe öffnen".'
+    )
     .setFontSize(11)
-    .setFontColor('#475569')
+    .setFontColor('#334155')
     .setHorizontalAlignment('center')
-    .setVerticalAlignment('middle');
+    .setVerticalAlignment('middle')
+    .setWrap(true);
 
   ss.setActiveSheet(startSheet);
 }
