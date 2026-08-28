@@ -695,22 +695,23 @@ function onOpen() {
   ui.createMenu('Warenwirtschaft (' + CONFIG.LOCATION_NAME + ')')
     .addItem('1. Gesamtsystem aufbauen & alle Belege einpflegen', 'initializeEntireSystemAndData')
     .addItem('2. 📂 Rechnungsordner JETZT manuell scannen & neue Belege einlesen', 'triggerManualInvoiceScan')
-    .addItem('3. ✏️ Artikelstamm & Suche direkt öffnen', 'openArtikelstammQuickEdit')
-    .addItem('4. 📊 Master-Zutaten & Kalkulationspreise öffnen', 'openMasterZutatenView')
-    .addItem('5. 🔄 Master-Zutaten & Preise synchronisieren', 'syncMasterZutatenAndDashboard')
+    .addItem('3. 🔄 Alle Belege (inkl. Archiv) mit neuen Parsern NEU einlesen', 'rescanAllInvoicesIncludingArchive')
+    .addItem('4. ✏️ Artikelstamm & Suche direkt öffnen', 'openArtikelstammQuickEdit')
+    .addItem('5. 📊 Master-Zutaten & Kalkulationspreise öffnen', 'openMasterZutatenView')
+    .addItem('6. 🔄 Master-Zutaten & Preise synchronisieren', 'syncMasterZutatenAndDashboard')
     .addSeparator()
-    .addItem('6. 📋 Prüfliste (PRUEFUNG_EINKAUF) öffnen & aktualisieren', 'generatePrueflisteManual')
-    .addItem('7. 💾 Korrekturen aus Prüfliste anwenden & dauerhaft speichern', 'applyUserCorrectionsFromPruefliste')
-    .addItem('8. 🧹 Fehlerhafte Artikel & Müll-Zeilen JETZT bereinigen', 'cleanupGarbageArticlesFromDatabase')
-    .addItem('9. 🩺 Vollständigen Diagnose-Bericht für KI-Optimierung anzeigen', 'showDiagnosticReportAssistant')
+    .addItem('7. 📋 Prüfliste (PRUEFUNG_EINKAUF) öffnen & aktualisieren', 'generatePrueflisteManual')
+    .addItem('8. 💾 Korrekturen aus Prüfliste anwenden & dauerhaft speichern', 'applyUserCorrectionsFromPruefliste')
+    .addItem('9. 🧹 Fehlerhafte Artikel & Müll-Zeilen JETZT bereinigen', 'cleanupGarbageArticlesFromDatabase')
+    .addItem('10. 🩺 Vollständigen Diagnose-Bericht für KI-Optimierung anzeigen', 'showDiagnosticReportAssistant')
     .addSeparator()
-    .addItem('10. 🔍 Plausibilitäts-Audit (Health-Check) ausführen', 'runManualHealthAudit')
-    .addItem('11. 📁 Google Drive Rechnungsordner Verbindung testen', 'checkDriveFolderConnection')
-    .addItem('12. Automatisierung (Täglich 12:00 + Freitags) aktivieren', 'setupAutomatedTriggers')
-    .addItem('13. Freitags-Wochenbericht per Email testen', 'testSendWeeklyReport')
+    .addItem('11. 🔍 Plausibilitäts-Audit (Health-Check) ausführen', 'runManualHealthAudit')
+    .addItem('12. 📁 Google Drive Rechnungsordner Verbindung testen', 'checkDriveFolderConnection')
+    .addItem('13. Automatisierung (Täglich 12:00 + Freitags) aktivieren', 'setupAutomatedTriggers')
+    .addItem('14. Freitags-Wochenbericht per Email testen', 'testSendWeeklyReport')
     .addSeparator()
-    .addItem('14. Nächste freie Artikel-ID generieren', 'promptNextArticleId')
-    .addItem('15. Preisabweichungen prüfen', 'checkPriceAnomalies')
+    .addItem('15. Nächste freie Artikel-ID generieren', 'promptNextArticleId')
+    .addItem('16. Preisabweichungen prüfen', 'checkPriceAnomalies')
     .addToUi();
 }
 
@@ -7647,32 +7648,36 @@ function updateDashboardFigures(ss) {
 
   const recLastRow = recSheet.getLastRow();
   if (recLastRow > 1) {
-    const data = recSheet.getRange(2, 1, recLastRow - 1, 19).getValues();
+    const data = recSheet.getRange(2, 1, recLastRow - 1, Math.min(13, recSheet.getLastColumn())).getValues();
     data.forEach(row => {
-      const rowMonth = String(row[18] || '').trim();
+      const rowMonth = String(row[12] || '').trim();
       const rowSupplier = String(row[3] || '').trim().toLowerCase();
 
       if (filterMonth && rowMonth !== filterMonth) return;
       if (filterSupplier && !rowSupplier.includes(filterSupplier)) return;
 
-      const netto = parseFloat(row[12]) || 0;
-      const brutto = parseFloat(row[15]) || 0;
-      const kat = String(row[8] || 'Food').trim();
-      const wg = String(row[7] || '').trim();
+      const netto = parseFloat(row[5]) || 0;
+      const mwst = parseFloat(row[6]) || 0;
+      const brutto = parseFloat(row[7]) || (netto + mwst);
+      const pos = parseInt(row[8], 10) || 1;
+      const kat = String(row[9] || 'Food').trim();
 
       totalNetto += netto;
       totalBrutto += brutto;
-      totalPos++;
+      totalPos += pos;
 
-      if (katStats[kat]) {
-        katStats[kat].netto += netto;
-        katStats[kat].pos++;
-      }
-
-      if (wg) {
-        if (!wgStats[wg]) wgStats[wg] = { netto: 0, pos: 0 };
-        wgStats[wg].netto += netto;
-        wgStats[wg].pos++;
+      if (kat === 'Food' || kat.includes('Food') || kat.includes('Küche') || kat.includes('Frische')) {
+        katStats['Food'].netto += netto;
+        katStats['Food'].pos += pos;
+      } else if (kat === 'Beverage' || kat.includes('Getränke') || kat.includes('Bar')) {
+        katStats['Beverage'].netto += netto;
+        katStats['Beverage'].pos += pos;
+      } else if (kat === 'Leergut' || kat.includes('Pfand')) {
+        katStats['Leergut'].netto += netto;
+        katStats['Leergut'].pos += pos;
+      } else {
+        katStats['Nonfood'].netto += netto;
+        katStats['Nonfood'].pos += pos;
       }
     });
   }
@@ -7949,9 +7954,124 @@ function triggerManualInvoiceScan() {
       'Keine neuen Rechnungen gefunden',
       `Der Google Drive Ordner "${folder.getName()}" enthält aktuell keine neuen PDFs oder Rechnungsbilder.\n\n` +
       `Alle vorherigen Belege wurden bereits verarbeitet und in den Unterordner "${CONFIG.ARCHIVE_FOLDER_NAME}" verschoben.\n\n` +
-      `Sobald du neue Rechnungen in den Ordner hochlädst, kannst du diese Funktion jederzeit erneut ausführen.`,
+      `Nutze Menüpunkt "3. 🔄 Alle Belege (inkl. Archiv) mit neuen Parsern NEU einlesen", um auch archivierte Dateien erneut mit den verbesserten Parsern zu scannen!`,
       ui.ButtonSet.OK
     );
+  }
+}
+
+/**
+ * Liest ALLE Rechnungen (auch die bereits im _Archiv liegenden) mit den neuen Hochpräzisions-Parsern erneut ein
+ */
+function rescanAllInvoicesIncludingArchive() {
+  const ui = SpreadsheetApp.getUi();
+  let ss;
+  try {
+    ss = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById(CONFIG.SHEET_ID);
+  } catch(e) {
+    ss = SpreadsheetApp.openById(CONFIG.SHEET_ID);
+  }
+  
+  let folder;
+  try {
+    folder = DriveApp.getFolderById(CONFIG.DRIVE_FOLDER_ID);
+  } catch(e) {
+    if (ui) ui.alert('Drive-Verbindungsfehler', 'Konnte nicht auf den Google Drive Ordner zugreifen:\n' + e.toString(), ui.ButtonSet.OK);
+    return;
+  }
+  
+  const allFiles = [];
+  
+  // 1. Dateien im Hauptordner sammeln
+  const mainFiles = folder.getFiles();
+  while (mainFiles.hasNext()) {
+    const f = mainFiles.next();
+    const mime = f.getMimeType();
+    if (mime.includes('pdf') || mime.includes('image')) {
+      allFiles.push(f);
+    }
+  }
+  
+  // 2. Dateien im _Archiv Unterordner sammeln
+  const subFolders = folder.getFoldersByName(CONFIG.ARCHIVE_FOLDER_NAME);
+  if (subFolders.hasNext()) {
+    const archiveFolder = subFolders.next();
+    const archFiles = archiveFolder.getFiles();
+    while (archFiles.hasNext()) {
+      const f = archFiles.next();
+      const mime = f.getMimeType();
+      if (mime.includes('pdf') || mime.includes('image')) {
+        allFiles.push(f);
+      }
+    }
+  }
+  
+  if (allFiles.length === 0) {
+    if (ui) ui.alert('Keine Belege gefunden', 'Weder im Hauptordner noch im Archiv wurden PDF- oder Bild-Dateien gefunden.', ui.ButtonSet.OK);
+    return;
+  }
+  
+  let processedCount = 0;
+  let totalItemsCount = 0;
+  const processedLog = [];
+  const errors = [];
+  const allBatchAlerts = [];
+  const startTime = Date.now();
+  let timeoutReached = false;
+  
+  for (let i = 0; i < allFiles.length; i++) {
+    if (Date.now() - startTime > 260000) {
+      timeoutReached = true;
+      break;
+    }
+    const file = allFiles[i];
+    const fileName = file.getName();
+    
+    try {
+      const ocrText = performGoogleOcr(file);
+      const invoiceData = parseInvoiceText(ocrText, fileName);
+      if (invoiceData.items && invoiceData.items.length > 0) {
+        const res = ingestInvoiceData(ss, invoiceData, fileName);
+        if (res.count > 0) {
+          processedCount++;
+          totalItemsCount += res.count;
+          if (res.alerts && res.alerts.length > 0) {
+            allBatchAlerts.push(...res.alerts);
+          }
+          processedLog.push(`• ${fileName} (${invoiceData.lieferant}, ${invoiceData.items.length} Pos., ${invoiceData.rechnungsNr || 'Ohne Nr'})`);
+        }
+      } else {
+        errors.push(`• ${fileName}: Keine gültigen Artikelpositionen erkannt`);
+      }
+    } catch (err) {
+      errors.push(`• ${fileName}: ${err.toString()}`);
+    }
+  }
+  
+  updateDashboardFigures(ss);
+  syncMasterZutatenFromArticles(ss);
+  refreshSupplierDropdowns(ss);
+  generatePruefliste(ss);
+  
+  let msg = `Neu-Scan abgeschlossen!\n\n` +
+            `• ${processedCount} Belege erfolgreich verbucht\n` +
+            `• ${totalItemsCount} Artikelpositionen in ARTIKELSTAMM eingepflegt\n` +
+            `• RECHNUNGSEINGANG, MASTER_ZUTATEN & DASHBOARD wurden vollständig aktualisiert!\n\n`;
+  
+  if (processedLog.length > 0) {
+    msg += `VERBUCHTE BELEGE (Auszug):\n` + processedLog.slice(0, 15).join('\n') + (processedLog.length > 15 ? `\n... und ${processedLog.length - 15} weitere` : '') + '\n\n';
+  }
+  
+  if (timeoutReached) {
+    msg += `⏱️ Google Apps Script Zeitlimit erreicht: Führe die Funktion bitte ein zweites Mal aus, um die restlichen Dateien einzulesen.\n\n`;
+  }
+  
+  if (errors.length > 0) {
+    msg += `Hinweise:\n` + errors.slice(0, 5).join('\n');
+  }
+  
+  if (ui) {
+    ui.alert('Re-Scan aller Belege', msg, ui.ButtonSet.OK);
   }
 }
 
