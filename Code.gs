@@ -7542,7 +7542,6 @@ function setupSchwundNeuSheet(ss) {
   sheet.getRange('A3:P3').setFontWeight('bold').setBackground('#1B365D').setFontColor('#FFFFFF').setHorizontalAlignment('center').setWrap(true);
   sheet.setRowHeight(3, 38);
   sheet.setFrozenRows(3);
-  sheet.setFrozenColumns(2);
 
   // 3. Dropdowns & Validierungen
   const empRule = SpreadsheetApp.newDataValidation().requireValueInList(LOSS_EMPLOYEES, true).setAllowInvalid(true).build();
