@@ -8228,14 +8228,50 @@ function isValidItemLine(line) {
   return true;
 }
 
+const MONTH_MAP = {
+  'jan': 0, 'januar': 0, 'january': 0,
+  'feb': 1, 'februar': 1, 'february': 1,
+  'mär': 2, 'maer': 2, 'märz': 2, 'maerz': 2, 'mar': 2, 'march': 2,
+  'apr': 3, 'april': 3,
+  'mai': 4, 'may': 4,
+  'jun': 5, 'juni': 5, 'june': 5,
+  'jul': 6, 'juli': 6, 'july': 6,
+  'aug': 7, 'august': 7,
+  'sep': 8, 'sept': 8, 'september': 8,
+  'okt': 9, 'oktober': 9, 'oct': 9, 'october': 9,
+  'nov': 10, 'november': 10,
+  'dez': 11, 'dezember': 11, 'dec': 11, 'december': 11
+};
+
 function extractInvoiceDate(text) {
-  const datePatterns = [
+  // 1. Textmonat (z. B. "12 Juni 2026", "12. Juni 2026", "12.06.2026")
+  const textDatePatterns = [
+    /(?:Rechnungsdatum|Belegdatum|Lieferdatum|Bestelldatum|Datum)[\s:\#\/\.]*(\d{1,2})[\.\s]+([a-zäöü]+)[\.\s]+(\d{2,4})/i,
+    /(\d{1,2})[\.\s]+(januar|februar|märz|maerz|april|mai|juni|juli|august|september|oktober|november|dezember|jan|feb|mär|apr|jun|jul|aug|sep|okt|nov|dez)[\.\s]+(\d{2,4})/i
+  ];
+
+  for (let pat of textDatePatterns) {
+    const match = (text || '').match(pat);
+    if (match) {
+      const d = parseInt(match[1], 10);
+      const mStr = match[2].toLowerCase().replace('.', '');
+      let y = parseInt(match[3], 10);
+      if (y < 100) y += 2000;
+      const m = MONTH_MAP[mStr];
+      if (m !== undefined && y >= 2020 && y <= 2030 && d >= 1 && d <= 31) {
+        return new Date(y, m, d);
+      }
+    }
+  }
+
+  // 2. Numerische Datumsformate (z. B. "12.06.2026")
+  const numPatterns = [
     /(?:Rechnungsdatum|Belegdatum|Lieferdatum|Datum)[\s:\#]*(\d{1,2})[\.\/](\d{1,2})[\.\/](\d{2,4})/i,
     /(\d{1,2})[\.\/](\d{1,2})[\.\/](\d{2,4})\s+\d{1,2}:\d{2}/,
     /(\d{1,2})[\.\/](\d{1,2})[\.\/](\d{2,4})/
   ];
 
-  for (let pat of datePatterns) {
+  for (let pat of numPatterns) {
     const match = (text || '').match(pat);
     if (match) {
       const d = parseInt(match[1], 10);
@@ -8252,18 +8288,18 @@ function extractInvoiceDate(text) {
 
 function extractInvoiceNumber(text, rechnungsDatum) {
   const patterns = [
+    /(?:Rechnungs-?(?:nummer|nr\.?)|Invoice\s*(?:no\.?|number))[\s:\#]*([A-Z0-9\-\/\.]{4,30})/i,
     /(?:BNr|Bon-Nr|Bonnummer)[\s:\#]*([0-9]{2,15})/i,
     /(?:TA-Nr|Transaktionsnummer)[\s:\#]*([0-9]{3,15})/i,
-    /(?:Rechnungs-?(?:nummer|nr\.?)?|Beleg-?(?:nummer|nr\.?)?|Invoice(?:[\s\-]?No\.?)?|Lieferschein-?(?:nummer|nr\.?)?)[\s:\#]*([A-Z0-9\-\/\.]{3,30})/i,
     /(?:Rechnung|Beleg|Invoice)\s+(?:Nr\.?|No\.?|Nummer)?[\s:\#]*([A-Z0-9\-\/\.]{3,30})/i,
-    /\b(?:RE|RN|INV|RG|LS)[\-\s\.\#]*([0-9]{4,15})\b/i
+    /\b(?:RE|RN|INV|RG|LS|DE)[\-\s\.\#]*([0-9A-Z]{5,20})\b/i
   ];
   for (let pat of patterns) {
     const match = (text || '').match(pat);
     if (match && match[1]) {
       const candidate = match[1].replace(/[\:\,\;\s]/g, '').trim();
-      if (!/^(nr|no|nummer|datum|vom|am|gesamt|total|seite|netto|brutto|eur|euro|ohne|fuer|mit)$/i.test(candidate) && /\d/.test(candidate) && candidate.length >= 2) {
-        return (pat.toString().includes('BNr') ? 'BNr-' : '') + candidate;
+      if (!/^(nr|no|nummer|datum|vom|am|gesamt|total|seite|netto|brutto|eur|euro|ohne|fuer|mit)$/i.test(candidate) && candidate.length >= 3) {
+        return candidate;
       }
     }
   }
@@ -8272,6 +8308,76 @@ function extractInvoiceNumber(text, rechnungsDatum) {
     return 'BON-' + bonMatch[1];
   }
   return 'RN-' + (rechnungsDatum ? Utilities.formatDate(rechnungsDatum, 'Europe/Berlin', 'yyyyMMdd') : 'UNKNOWN');
+}
+
+function isAmazonInvoice(text, supplier) {
+  const t = (text || '').toLowerCase();
+  const s = (supplier || '').toLowerCase();
+  return s.includes('amazon') || t.includes('amazon business') || t.includes('amazon eu') || t.includes('asin:');
+}
+
+function parseAmazonInvoiceLines(lines) {
+  const items = [];
+  let inDetails = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    if (/rechnungsdetails/i.test(line)) {
+      inDetails = true;
+      continue;
+    }
+    if (/^(?:rechnungssumme|gesamtbetrag|ust\.\s*%|zwischensumme\s*\(ohne\s*ust\)|ust\.\s*gesamt)/i.test(line)) {
+      inDetails = false;
+      break;
+    }
+
+    if (inDetails) {
+      if (/^(?:beschreibung|menge|stückpreis|stueckpreis|ust\b|zwischensumme|asin:)/i.test(line)) {
+        continue;
+      }
+
+      // Pattern: "ROYAL THAI - Lychees in Sirup - (1 X 565 GR) 1 4,38 € 7.0% 4,69 €"
+      const itemMatch = line.match(/^(.+?)\s+(\d+)\s+(\d+[\.,]\d{2})\s*€?\s+(\d+[\.,]?\d*)\s*%\s+(\d+[\.,]\d{2})\s*€?$/i);
+      if (itemMatch) {
+        const rawName = itemMatch[1].trim();
+        const menge = parseInt(itemMatch[2], 10) || 1;
+        const einzelNetto = parseFloat(itemMatch[3].replace(',', '.'));
+        const cleanName = cleanArticleName(rawName);
+        if (isValidArticleName(cleanName)) {
+          const wg = matchWarengruppe(cleanName);
+          items.push({
+            name: cleanName,
+            menge: menge,
+            einheit: determineUnit(cleanName, line),
+            einzelNetto: einzelNetto,
+            gesamtNetto: Math.round(einzelNetto * menge * 100) / 100,
+            wg: wg
+          });
+        }
+      } else {
+        const priceMatches = line.match(/\b\d+[\.,]\d{2}\b/g);
+        if (priceMatches && priceMatches.length >= 1) {
+          const rawName = line.replace(/\b\d+[\.,]\d{2}\s*€?\b/g, '').replace(/\b\d+\s*%\b/g, '').replace(/\s+\d+\s*$/, '').trim();
+          const cleanName = cleanArticleName(rawName);
+          if (isValidArticleName(cleanName)) {
+            const einzelNetto = parseFloat(priceMatches[0].replace(',', '.'));
+            const wg = matchWarengruppe(cleanName);
+            items.push({
+              name: cleanName,
+              menge: 1,
+              einheit: determineUnit(cleanName, line),
+              einzelNetto: einzelNetto,
+              gesamtNetto: einzelNetto,
+              wg: wg
+            });
+          }
+        }
+      }
+    }
+  }
+  return items;
 }
 
 function parseRetailReceiptLines(lines, supplier) {
@@ -8356,9 +8462,11 @@ function parseInvoiceText(text, fileName) {
   // 3. Rechnungsnummer erkennen
   const rechnungsNr = extractInvoiceNumber(text, rechnungsDatum);
 
-  // 4. Positionen erkennen (Einzelhandel vs. Großhandel)
+  // 4. Positionen erkennen (Amazon vs. Einzelhandel vs. Großhandel)
   let items = [];
-  if (isRetailReceipt(text, lieferant)) {
+  if (isAmazonInvoice(text, lieferant)) {
+    items = parseAmazonInvoiceLines(lines);
+  } else if (isRetailReceipt(text, lieferant)) {
     items = parseRetailReceiptLines(lines, lieferant);
   }
 
