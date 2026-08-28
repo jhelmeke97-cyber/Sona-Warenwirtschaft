@@ -38,9 +38,16 @@ const CONFIG = {
   NAME_SCHWUND_BRUCH: 'SCHWUND_BRUCH',
   NAME_SCHWUND_NEU: 'SCHWUND_NEU',
   TARGET_SCHWUND_SPREADSHEET_ID: '1-eonw5BPF6zwCpfRXtQy9a2jyyRH9vevabiFtoA2Rno',
+  BRUCH_SPREADSHEET_ID: '1EudAGrkHhqxA8ii2B07_wALa8USgI8tJhz4potS73KA',
   SONA_HUB_SPREADSHEET_ID: '1VZ2Q9tU3QcmVhYZRotYWkV-wgNwQFWsGZ6QLvH4goWE',
   SONA_HUB_TAB_WEEKLY: 'SCHWUND_SONA_KARLI',
-  SONA_HUB_TAB_RAW: 'SCHWUND_ROHDATEN_KARLI'
+  SONA_HUB_TAB_RAW: 'SCHWUND_ROHDATEN_KARLI',
+  SONA_HUB_TAB_BRUCH_WEEKLY: 'BRUCH_SONA_KARLI',
+  NOTIFICATION_EMAILS: [
+    'julian@sona-leipzig.de',
+    'anhminh.phamle@outlook.com'
+  ],
+  NOTIFICATION_EMAIL: 'julian@sona-leipzig.de, anhminh.phamle@outlook.com'
 };
 
 /**
@@ -60,15 +67,22 @@ const PREIS_CONFIG = {
 };
 
 function getUserEmail() {
+  const recipients = ['julian@sona-leipzig.de', 'anhminh.phamle@outlook.com'];
   try {
     const user = Session.getActiveUser();
-    if (user && user.getEmail && user.getEmail()) return user.getEmail();
+    if (user && user.getEmail && user.getEmail()) {
+      const uEmail = user.getEmail().toLowerCase().trim();
+      if (uEmail && !recipients.includes(uEmail)) recipients.push(uEmail);
+    }
   } catch(e) {}
   try {
     const eff = Session.getEffectiveUser();
-    if (eff && eff.getEmail && eff.getEmail()) return eff.getEmail();
+    if (eff && eff.getEmail && eff.getEmail()) {
+      const effEmail = eff.getEmail().toLowerCase().trim();
+      if (effEmail && !recipients.includes(effEmail)) recipients.push(effEmail);
+    }
   } catch(e2) {}
-  return CONFIG.NOTIFICATION_EMAIL || 'julian@sona-leipzig.de';
+  return recipients.join(', ');
 }
 
 const MASTER_CATALOG_DICTIONARY = [
